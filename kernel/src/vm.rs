@@ -1,4 +1,5 @@
 use core::arch::asm;
+use crate::mm::{allocate_frame, get_hhdm_offset};
 
 pub const PAGE_SIZE: usize = 4096;
 
@@ -53,6 +54,16 @@ impl VirtAddr {
     }
 
     #[inline]
+    pub const fn as_ptr<T>(self) -> *const T {
+        self.0 as *const T
+    }
+
+    #[inline]
+    pub const fn as_mut_ptr<T>(self) -> *mut T {
+        self.0 as *mut T
+    }
+
+    #[inline]
     pub const fn is_aligned(self) -> bool {
         (self.0 % PAGE_SIZE as u64) == 0
     }
@@ -89,6 +100,69 @@ impl VirtAddr {
     }
 }
 
+pub struct PageTableFlags;
+impl PageTableFlags {
+    pub const PRESENT: u64 = 1 << 0;
+    pub const WRITABLE: u64 = 1 << 1;
+    pub const USER_ACCESSIBLE: u64 = 1 << 2;
+    pub const WRITE_THROUGH: u64 = 1 << 3;
+    pub const NO_CACHE: u64 = 1 << 4;
+    pub const ACCESSED: u64 = 1 << 5;
+    pub const DIRTY: u64 = 1 << 6;
+    pub const HUGE_PAGE: u64 = 1 << 7;
+    pub const GLOBAL: u64 = 1 << 8;
+    pub const NO_EXECUTE: u64 = 1 << 63;
+}
+
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub struct PageTableEntry(pub u64);
+
+impl PageTableEntry {
+    pub const fn new() -> Self {
+        Self(0)
+    }
+
+    pub fn is_present(&self) -> bool {
+        (self.0 & PageTableFlags::PRESENT) != 0
+    }
+
+    pub fn is_huge(&self) -> bool {
+        (self.0 & PageTableFlags::HUGE_PAGE) != 0
+    }
+
+    pub fn phys_addr(&self) -> PhysAddr {
+        PhysAddr::new(self.0 & 0x000f_ffff_ffff_f000)
+    }
+
+    pub fn set_frame(&mut self, frame: PhysAddr, flags: u64) {
+        self.0 = (frame.as_u64() & 0x000f_ffff_ffff_f000) | (flags & !0x000f_ffff_ffff_f000);
+    }
+
+    pub fn clear(&mut self) {
+        self.0 = 0;
+    }
+}
+
+#[repr(C, align(4096))]
+pub struct PageTable {
+    pub entries: [PageTableEntry; 512],
+}
+
+impl PageTable {
+    pub const fn new() -> Self {
+        Self {
+            entries: [PageTableEntry::new(); 512],
+        }
+    }
+
+    pub fn zero(&mut self) {
+        for entry in self.entries.iter_mut() {
+            entry.clear();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cr3 {
     pub pml4_phys: PhysAddr,
@@ -106,6 +180,80 @@ impl Cr3 {
             flags: (val & 0xfff) as u16,
         }
     }
+}
+
+#[inline]
+pub unsafe fn invlpg(vaddr: VirtAddr) {
+    unsafe {
+        asm!("invlpg [{}]", in(reg) vaddr.as_u64(), options(nostack, preserves_flags));
+    }
+}
+
+pub fn phys_to_virt(phys: PhysAddr) -> Option<VirtAddr> {
+    let hhdm = get_hhdm_offset()?;
+    phys.as_u64().checked_add(hhdm).map(VirtAddr::new)
+}
+
+/// Maps a 4KiB virtual page to a physical frame in the active PML4
+pub unsafe fn map_page(vaddr: VirtAddr, pframe: PhysAddr, flags: u64) -> Result<(), &'static str> {
+    if !vaddr.is_aligned() {
+        return Err("Virtual address is not 4KiB aligned");
+    }
+    if !vaddr.is_canonical() {
+        return Err("Virtual address is non-canonical");
+    }
+    if !pframe.is_aligned() {
+        return Err("Physical frame is not 4KiB aligned");
+    }
+
+    let cr3 = Cr3::read();
+    let pml4_virt = phys_to_virt(cr3.pml4_phys).ok_or("HHDM offset not available")?;
+    let pml4 = unsafe { &mut *pml4_virt.as_mut_ptr::<PageTable>() };
+
+    let p4_idx = vaddr.p4_index();
+    let p3_table = get_or_create_next_table(&mut pml4.entries[p4_idx], flags)?;
+
+    let p3_idx = vaddr.p3_index();
+    let p2_table = get_or_create_next_table(&mut p3_table.entries[p3_idx], flags)?;
+
+    let p2_idx = vaddr.p2_index();
+    let p1_table = get_or_create_next_table(&mut p2_table.entries[p2_idx], flags)?;
+
+    let p1_idx = vaddr.p1_index();
+    let p1_entry = &mut p1_table.entries[p1_idx];
+    if p1_entry.is_present() {
+        return Err("Page already mapped");
+    }
+
+    p1_entry.set_frame(pframe, flags | PageTableFlags::PRESENT);
+    unsafe { invlpg(vaddr) };
+
+    Ok(())
+}
+
+fn get_or_create_next_table(
+    entry: &mut PageTableEntry,
+    flags: u64,
+) -> Result<&'static mut PageTable, &'static str> {
+    if entry.is_present() {
+        if entry.is_huge() {
+            return Err("Encountered unexpected huge page entry in page table hierarchy");
+        }
+        let next_table_virt = phys_to_virt(entry.phys_addr()).ok_or("HHDM offset not available")?;
+        return Ok(unsafe { &mut *next_table_virt.as_mut_ptr::<PageTable>() });
+    }
+
+    // Allocate new page table frame from PMM
+    let new_frame = allocate_frame().ok_or("PMM out of memory for page table allocation")?;
+    let new_table_virt = phys_to_virt(new_frame).ok_or("HHDM offset not available")?;
+    let table = unsafe { &mut *new_table_virt.as_mut_ptr::<PageTable>() };
+    table.zero();
+
+    // Intermediate entries must be present and writable so lower levels can enforce leaf permissions
+    let table_flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | (flags & PageTableFlags::USER_ACCESSIBLE);
+    entry.set_frame(new_frame, table_flags);
+
+    Ok(table)
 }
 
 pub fn inspect_paging_environment() {
