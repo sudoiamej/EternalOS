@@ -9,7 +9,8 @@ const TASK_STACKS_BASE: u64 = 0xffff_a000_0000_0000;
 pub const MAX_TASKS: usize = 16;
 
 static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
-static SCHEDULER_LOCK: AtomicBool = AtomicBool::new(false);
+pub static SCHEDULER_LOCK: AtomicBool = AtomicBool::new(false);
+pub static PREEMPTION_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskState {
@@ -98,6 +99,16 @@ impl Scheduler {
             }
         }
         Err("Scheduler task table full")
+    }
+
+    pub fn has_runnable_workers(&self) -> bool {
+        let mut count = 0;
+        for t in self.tasks.iter().flatten() {
+            if (t.state == TaskState::Ready || t.state == TaskState::Running) && t.id != 0 {
+                count += 1;
+            }
+        }
+        count > 0
     }
 
     pub fn current_task_id(&self) -> u64 {
@@ -189,6 +200,8 @@ pub extern "C" fn task_entry_trampoline() {
     let entry_fn: extern "C" fn();
     unsafe {
         asm!("mov {}, r12", out(reg) entry_fn, options(nomem, nostack, preserves_flags));
+        // Re-enable interrupts so the task can be preempted by the timer
+        asm!("sti", options(nomem, nostack, preserves_flags));
     }
 
     // Call the actual task entry function
@@ -202,33 +215,36 @@ pub extern "C" fn task_entry_trampoline() {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn x86_64_switch_context(prev: *mut Context, next: *const Context) {
     core::arch::naked_asm!(
-            // Save callee-saved registers to prev context
-            "mov [rdi + 0], r15",
-            "mov [rdi + 8], r14",
-            "mov [rdi + 16], r13",
-            "mov [rdi + 24], r12",
-            "mov [rdi + 32], rbx",
-            "mov [rdi + 40], rbp",
-            "mov [rdi + 48], rsp",
-            "lea rax, [rip + 1f]",
-            "mov [rdi + 56], rax",
+        // Save callee-saved registers to prev context
+        "mov [rdi + 0], r15",
+        "mov [rdi + 8], r14",
+        "mov [rdi + 16], r13",
+        "mov [rdi + 24], r12",
+        "mov [rdi + 32], rbx",
+        "mov [rdi + 40], rbp",
+        "mov [rdi + 48], rsp",
+        "lea rax, [rip + 1f]",
+        "mov [rdi + 56], rax",
 
-            // Restore callee-saved registers from next context
-            "mov r15, [rsi + 0]",
-            "mov r14, [rsi + 8]",
-            "mov r13, [rsi + 16]",
-            "mov r12, [rsi + 24]",
-            "mov rbx, [rsi + 32]",
-            "mov rbp, [rsi + 40]",
-            "mov rsp, [rsi + 48]",
-            "mov rax, [rsi + 56]",
-            "jmp rax",
-            "1:",
-            "ret"
-        );
+        // Restore callee-saved registers from next context
+        "mov r15, [rsi + 0]",
+        "mov r14, [rsi + 8]",
+        "mov r13, [rsi + 16]",
+        "mov r12, [rsi + 24]",
+        "mov rbx, [rsi + 32]",
+        "mov rbp, [rsi + 40]",
+        "mov rsp, [rsi + 48]",
+        "mov rax, [rsi + 56]",
+        "jmp rax",
+        "1:",
+        "ret"
+    );
 }
 
 pub fn yield_now() {
+    // Disable interrupts to avoid preemption while initiating a cooperative yield
+    unsafe { asm!("cli", options(nomem, nostack, preserves_flags)) };
+
     while SCHEDULER_LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
         core::hint::spin_loop();
     }
@@ -239,9 +255,13 @@ pub fn yield_now() {
     }
 
     SCHEDULER_LOCK.store(false, Ordering::Release);
+
+    unsafe { asm!("sti", options(nomem, nostack, preserves_flags)) };
 }
 
 pub fn terminate_task() -> ! {
+    unsafe { asm!("cli", options(nomem, nostack, preserves_flags)) };
+
     while SCHEDULER_LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
         core::hint::spin_loop();
     }
@@ -253,8 +273,10 @@ pub fn terminate_task() -> ! {
 
     SCHEDULER_LOCK.store(false, Ordering::Release);
 
-    // If no more tasks, idle in halt loop
-    crate::hcf();
+    // If no more tasks, idle in halt loop with interrupts enabled
+    loop {
+        unsafe { asm!("sti; hlt", options(nomem, nostack, preserves_flags)) };
+    }
 }
 
 pub fn spawn_task(name: &'static str, entry: extern "C" fn()) -> Result<u64, &'static str> {
@@ -292,8 +314,8 @@ pub fn spawn_task(name: &'static str, entry: extern "C" fn()) -> Result<u64, &'s
 }
 
 pub fn init_tasking() {
-    crate::log_info!("Initializing Kernel Tasking & Cooperative Scheduler...");
-    crate::log_info!("  Scheduler Policy : Cooperative Round-Robin");
+    crate::log_info!("Initializing Kernel Tasking & Cooperative/Preemptive Scheduler...");
+    crate::log_info!("  Scheduler Policy : Round-Robin with Hardware Timer Time-Slicing");
     crate::log_info!("  Task Stack Size  : {} KiB per task (guard-page spaced)", STACK_SIZE / 1024);
     crate::log_info!("  Max Concurrency  : {} kernel tasks", MAX_TASKS);
 

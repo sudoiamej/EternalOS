@@ -1,5 +1,8 @@
 use core::arch::asm;
 use core::fmt;
+use core::sync::atomic::Ordering;
+use crate::task::{PREEMPTION_COUNT, SCHEDULER, SCHEDULER_LOCK};
+use crate::timer::{send_eoi, TIMER_TICKS};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -45,9 +48,13 @@ impl IdtEntry {
     }
 
     pub fn set_handler(&mut self, handler: usize) {
+        let cs: u16;
+        unsafe {
+            core::arch::asm!("mov {0:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags));
+        }
         self.pointer_low = handler as u16;
-        self.gdt_selector = 0x08; // Kernel code segment selector
-        self.options = 0x8E00;    // Present (bit 15), DPL 0, 64-bit Interrupt Gate (0xE)
+        self.gdt_selector = cs; // Use active Limine kernel code segment selector (0x28)
+        self.options = 0x8E00;   // Present (bit 15), DPL 0, 64-bit Interrupt Gate (0xE)
         self.pointer_middle = (handler >> 16) as u16;
         self.pointer_high = (handler >> 32) as u32;
         self.reserved = 0;
@@ -109,12 +116,33 @@ pub extern "x86-interrupt" fn general_protection_handler(
     crate::hcf();
 }
 
+/// Hardware Timer Interrupt Handler (IRQ0 -> Vector 32)
+pub extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    send_eoi();
+
+    // If preemption is possible and scheduler is unlocked, record preemption event
+    if SCHEDULER_LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok() {
+        PREEMPTION_COUNT.fetch_add(1, Ordering::Relaxed);
+
+        unsafe {
+            #[allow(static_mut_refs)]
+            if SCHEDULER.has_runnable_workers() {
+                SCHEDULER.schedule_next();
+            }
+        }
+
+        SCHEDULER_LOCK.store(false, Ordering::Release);
+    }
+}
+
 pub fn init() {
     unsafe {
         IDT.entries[0].set_handler(divide_by_zero_handler as *const () as usize);
         IDT.entries[6].set_handler(invalid_opcode_handler as *const () as usize);
         IDT.entries[8].set_handler(double_fault_handler as *const () as usize);
         IDT.entries[13].set_handler(general_protection_handler as *const () as usize);
+        IDT.entries[32].set_handler(timer_interrupt_handler as *const () as usize);
 
         let idt_ptr = IdtPointer {
             limit: (core::mem::size_of::<Idt>() - 1) as u16,
@@ -124,5 +152,5 @@ pub fn init() {
         asm!("lidt [{}]", in(reg) &idt_ptr, options(readonly, nostack, preserves_flags));
     }
 
-    crate::log_info!("Interrupt Descriptor Table (IDT) loaded with core exception handlers (#DE, #UD, #DF, #GP).");
+    crate::log_info!("Interrupt Descriptor Table (IDT) loaded with CPU exceptions and Timer IRQ0 (Vector 32).");
 }
