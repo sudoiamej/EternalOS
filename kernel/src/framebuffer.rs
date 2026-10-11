@@ -28,6 +28,12 @@ impl Color {
     pub const TEXT_PRIMARY: Color = Color { r: 0xFA, g: 0xFA, b: 0xFC }; // Bright crisp white
     pub const TEXT_MUTED: Color = Color { r: 0x8A, g: 0x9B, b: 0xAF }; // Cool muted grey-blue
 
+    // Eternal Purple palette identity
+    pub const PURPLE: Color = Color { r: 0x7C, g: 0x3A, b: 0xED }; // Deep electric purple
+    pub const LAVENDER: Color = Color { r: 0xA7, g: 0x8B, b: 0xFA }; // Lavender secondary
+    pub const HIGHLIGHT: Color = Color { r: 0xC4, g: 0xB5, b: 0xFD }; // Lavender highlight
+    pub const DARK_PURPLE_BG: Color = Color { r: 0x11, g: 0x10, b: 0x19 }; // Dark purple terminal bg
+
     #[inline]
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }

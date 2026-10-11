@@ -272,6 +272,24 @@ impl VfsRouter {
         let inode = self.resolve_path(path)?;
         self.root_fs.get_metadata(inode)
     }
+
+    /// Unlink (remove) a file or empty directory at `path`.
+    pub fn unlink(&mut self, path: &str) -> Result<(), VfsError> {
+        let mut canon_buf = [0u8; MAX_PATH_LEN];
+        let len = normalize_path(path, &mut canon_buf)?;
+        let canon_str = core::str::from_utf8(&canon_buf[..len]).map_err(|_| VfsError::InvalidPath)?;
+
+        if canon_str == "/" {
+            return Err(VfsError::InvalidArgument);
+        }
+
+        let last_slash = canon_str.rfind('/').ok_or(VfsError::InvalidPath)?;
+        let parent_path = if last_slash == 0 { "/" } else { &canon_str[..last_slash] };
+        let basename = &canon_str[last_slash + 1..];
+
+        let parent_inode = self.resolve_path(parent_path)?;
+        self.root_fs.unlink(parent_inode, basename)
+    }
 }
 
 static VFS_ROUTER: SpinLock<VfsRouter> = SpinLock::new(VfsRouter::new());

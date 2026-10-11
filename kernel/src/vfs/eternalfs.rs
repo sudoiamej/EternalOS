@@ -466,4 +466,8 @@ impl<D: BlockDevice + Send + Sync> FileSystem for EternalFs<D> {
 
         Ok(copied)
     }
+
+    fn unlink(&mut self, _parent: InodeId, _name: &str) -> Result<(), VfsError> {
+        Err(VfsError::PermissionDenied)
+    }
 }

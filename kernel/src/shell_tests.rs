@@ -1,0 +1,196 @@
+use crate::shell::{execute_command, ShellContext, COMMAND_REGISTRY};
+use crate::shell_parser::parse_command_line;
+use crate::{log_info, println};
+
+/// Automated test suite for the Command Suite & Native CLI Ecosystem
+pub fn run_phase_shell_tests() {
+    log_info!("====================================================");
+    log_info!("  RUNNING AUTOMATED TEST SUITE: COMMAND SUITE & CLI ");
+    log_info!("====================================================");
+
+    let mut ctx = ShellContext::new();
+
+    // 1. Test Command Parser & Quoted Arguments
+    test_argument_parsing();
+
+    // 2. Test Command Registry & Aliases
+    test_command_registry();
+
+    // 3. Test Shell Built-in Commands (echo, which, pwd, etc.)
+    test_builtin_commands(&mut ctx);
+
+    // 4. Test Filesystem Operations (mkdir, touch, cp, stat, cat, rm)
+    test_filesystem_commands(&mut ctx);
+
+    // 5. Test System and Hardware Diagnostic Commands (esys, emem, epci, echeck)
+    test_system_commands(&mut ctx);
+
+    log_info!("====================================================");
+    log_info!("  ALL COMMAND SUITE TESTS COMPLETED SUCCESSFULLY!   ");
+    log_info!("====================================================");
+    println!(">>> SHELL TEST PASS: All CLI commands and parsers verified.");
+}
+
+fn test_argument_parsing() {
+    log_info!("[TEST 1/5] Testing Quoted Argument Parser...");
+
+    // Basic space separation
+    let p1 = parse_command_line("echo hello world");
+    assert_eq!(p1.len(), 3);
+    assert_eq!(p1.get(0), Some("echo"));
+    assert_eq!(p1.get(1), Some("hello"));
+    assert_eq!(p1.get(2), Some("world"));
+
+    // Double quotes with spaces
+    let p2 = parse_command_line("echo \"hello world from eternal\"");
+    assert_eq!(p2.len(), 2);
+    assert_eq!(p2.get(0), Some("echo"));
+    assert_eq!(p2.get(1), Some("hello world from eternal"));
+
+    // Single quotes
+    let p3 = parse_command_line("mkdir 'test dir'");
+    assert_eq!(p3.len(), 2);
+    assert_eq!(p3.get(0), Some("mkdir"));
+    assert_eq!(p3.get(1), Some("test dir"));
+
+    // Leading and trailing spaces
+    let p4 = parse_command_line("   ls   /   ");
+    assert_eq!(p4.len(), 2);
+    assert_eq!(p4.get(0), Some("ls"));
+    assert_eq!(p4.get(1), Some("/"));
+
+    log_info!("  [OK] Argument parsing with quotes and whitespace verified.");
+}
+
+fn test_command_registry() {
+    log_info!("[TEST 2/5] Testing Command Registry & Alias Resolution...");
+
+    assert!(COMMAND_REGISTRY.len() >= 25, "Registry must contain at least 25 commands");
+
+    // Verify key commands exist
+    let commands = ["help", "ls", "cd", "cat", "mkdir", "touch", "cp", "rm", "eternal", "esys", "emem", "epci", "echeck"];
+    for cmd in commands {
+        assert!(COMMAND_REGISTRY.iter().any(|c| c.name == cmd), "Command '{}' must be registered", cmd);
+    }
+
+    // Verify aliases
+    let alias_cases = [("cls", "clear"), ("dir", "ls"), ("type", "cat"), ("meminfo", "emem"), ("sysinfo", "esys"), ("lspci", "epci")];
+    for (alias, canonical) in alias_cases {
+        let entry = COMMAND_REGISTRY.iter().find(|c| c.name == canonical).expect("Canonical command not found");
+        assert!(entry.aliases.iter().any(|&a| a == alias), "Alias '{}' must map to '{}'", alias, canonical);
+    }
+
+    log_info!("  [OK] Registry coverage and alias lookup verified.");
+}
+
+fn test_builtin_commands(ctx: &mut ShellContext) {
+    log_info!("[TEST 3/5] Testing Shell Built-ins & Navigation...");
+
+    // Echo
+    let s_echo = execute_command("echo test", ctx);
+    assert_eq!(s_echo, 0);
+
+    // Which
+    let s_which = execute_command("which ls", ctx);
+    assert_eq!(s_which, 0);
+
+    // Alias
+    let s_alias = execute_command("alias", ctx);
+    assert_eq!(s_alias, 0);
+
+    // Pwd
+    let s_pwd = execute_command("pwd", ctx);
+    assert_eq!(s_pwd, 0);
+    assert_eq!(ctx.cwd_str(), "/");
+
+    // Invalid command returns 127
+    let s_invalid = execute_command("nonexistent_command_xyz", ctx);
+    assert_eq!(s_invalid, 127);
+
+    log_info!("  [OK] Shell built-ins and exit codes verified.");
+}
+
+fn test_filesystem_commands(ctx: &mut ShellContext) {
+    log_info!("[TEST 4/5] Testing Filesystem Commands (mkdir, touch, cp, stat, rm)...");
+
+    // 1. mkdir /cli_test
+    let s_mkdir = execute_command("mkdir /cli_test", ctx);
+    assert_eq!(s_mkdir, 0, "mkdir /cli_test failed");
+
+    // 2. cd /cli_test
+    let s_cd = execute_command("cd /cli_test", ctx);
+    assert_eq!(s_cd, 0, "cd /cli_test failed");
+    assert_eq!(ctx.cwd_str(), "/cli_test");
+
+    // 3. touch file1.txt
+    let s_touch = execute_command("touch file1.txt", ctx);
+    assert_eq!(s_touch, 0, "touch file1.txt failed");
+
+    // 4. stat file1.txt
+    let s_stat = execute_command("stat file1.txt", ctx);
+    assert_eq!(s_stat, 0, "stat file1.txt failed");
+
+    // 5. cp file1.txt file2.txt
+    let s_cp = execute_command("cp file1.txt file2.txt", ctx);
+    assert_eq!(s_cp, 0, "cp file1.txt file2.txt failed");
+
+    // 6. ls
+    let s_ls = execute_command("ls", ctx);
+    assert_eq!(s_ls, 0, "ls failed");
+
+    // 7. rm file1.txt
+    let s_rm = execute_command("rm file1.txt", ctx);
+    assert_eq!(s_rm, 0, "rm file1.txt failed");
+
+    // Verify file1.txt is gone
+    let s_stat_gone = execute_command("stat file1.txt", ctx);
+    assert_eq!(s_stat_gone, 1, "file1.txt should no longer exist");
+
+    // 8. rm file2.txt
+    let s_rm2 = execute_command("rm file2.txt", ctx);
+    assert_eq!(s_rm2, 0, "rm file2.txt failed");
+
+    // 9. cd / and rm /cli_test
+    let s_cd_root = execute_command("cd /", ctx);
+    assert_eq!(s_cd_root, 0);
+    let s_rmdir = execute_command("rm /cli_test", ctx);
+    assert_eq!(s_rmdir, 0, "rm empty dir failed");
+
+    log_info!("  [OK] Filesystem manipulation lifecycle (CRUD) verified.");
+}
+
+fn test_system_commands(ctx: &mut ShellContext) {
+    log_info!("[TEST 5/5] Testing System, Hardware & Integrity Commands...");
+
+    let s_eternal = execute_command("eternal", ctx);
+    assert_eq!(s_eternal, 0);
+
+    let s_esys = execute_command("esys", ctx);
+    assert_eq!(s_esys, 0);
+
+    let s_emem = execute_command("emem", ctx);
+    assert_eq!(s_emem, 0);
+
+    let s_eproc = execute_command("eproc", ctx);
+    assert_eq!(s_eproc, 0);
+
+    let s_emount = execute_command("emount", ctx);
+    assert_eq!(s_emount, 0);
+
+    let s_uptime = execute_command("uptime", ctx);
+    assert_eq!(s_uptime, 0);
+
+    let s_epci = execute_command("epci", ctx);
+    assert_eq!(s_epci, 0);
+
+    let s_edrv = execute_command("edrv", ctx);
+    assert_eq!(s_edrv, 0);
+
+    let s_echeck = execute_command("echeck", ctx);
+    assert_eq!(s_echeck, 0);
+
+    let s_einfo = execute_command("einfo", ctx);
+    assert_eq!(s_einfo, 0);
+
+    log_info!("  [OK] System and diagnostics commands verified.");
+}

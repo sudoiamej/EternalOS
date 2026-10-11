@@ -59,7 +59,10 @@ pub mod syscall;
 pub mod syscall_handler;
 pub mod elf;
 pub mod process;
+pub mod shell_parser;
 pub mod shell;
+#[cfg(feature = "test-shell")]
+pub mod shell_tests;
 pub mod user_test_elf;
 #[cfg(feature = "test-userspace")]
 pub mod userspace_tests;
@@ -151,6 +154,10 @@ unsafe extern "C" fn kmain() -> ! {
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
     // 15. Test Hooks
+    #[cfg(feature = "test-shell")]
+    {
+        shell_tests::run_phase_shell_tests();
+    }
     #[cfg(feature = "test-input")]
     {
         input_tests::run_input_tests();
@@ -299,6 +306,7 @@ unsafe extern "C" fn kmain() -> ! {
 
     // 15. Transition from boot diagnostics to interactive shell
     #[cfg(not(any(
+        feature = "test-shell",
         feature = "test-userspace",
         feature = "test-eternalfs",
         feature = "test-vfs",

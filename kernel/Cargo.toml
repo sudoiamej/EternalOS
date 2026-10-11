@@ -28,6 +28,7 @@ test-vfs = []
 test-eternalfs = []
 test-userspace = []
 test-input = []
+test-shell = []
 
 [dependencies]
 limine = "0.5"

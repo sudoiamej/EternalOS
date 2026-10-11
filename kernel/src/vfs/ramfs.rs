@@ -371,4 +371,47 @@ impl FileSystem for RamFs {
             RamNodeKind::File { .. } => Err(VfsError::NotADirectory),
         }
     }
+
+    fn unlink(&mut self, parent: InodeId, name: &str) -> Result<(), VfsError> {
+        if name.is_empty() || name == "." || name == ".." {
+            return Err(VfsError::InvalidArgument);
+        }
+
+        // Find child inode under parent
+        let child_inode = self.lookup(parent, name)?;
+
+        // If the target is a directory, verify it is empty
+        let child_node = self.find_node(child_inode).ok_or(VfsError::NotFound)?;
+        if let RamNodeKind::Directory { child_count, .. } = &child_node.kind {
+            if *child_count > 0 {
+                return Err(VfsError::DirectoryNotEmpty);
+            }
+        }
+
+        // Deallocate the child node
+        for slot in self.nodes.iter_mut() {
+            if slot.in_use && slot.inode == child_inode {
+                *slot = RamNode::empty();
+                break;
+            }
+        }
+
+        // Remove the entry from the parent directory
+        let p_mut = self.find_node_mut(parent).ok_or(VfsError::NotFound)?;
+        if let RamNodeKind::Directory { children, child_count } = &mut p_mut.kind {
+            let name_bytes = name.as_bytes();
+            for slot in children.iter_mut() {
+                if let Some(child) = slot {
+                    if child.name_len == name_bytes.len() && &child.name[..child.name_len] == name_bytes {
+                        *slot = None;
+                        *child_count = child_count.saturating_sub(1);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        Err(VfsError::NotFound)
+    }
 }
+

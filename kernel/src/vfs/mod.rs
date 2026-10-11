@@ -210,4 +210,7 @@ pub trait FileSystem: Send + Sync {
 
     /// Enumerate directory entries of `inode`. Returns number of entries written into `out`.
     fn readdir(&self, inode: InodeId, offset: usize, out: &mut [DirEntry]) -> Result<usize, VfsError>;
+
+    /// Unlink (remove) a file or empty directory with `name` from parent directory `parent`.
+    fn unlink(&mut self, parent: InodeId, name: &str) -> Result<(), VfsError>;
 }

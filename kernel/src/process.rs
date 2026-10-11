@@ -208,6 +208,16 @@ impl ProcessManager {
 
 pub static PROCESS_MANAGER: SpinLock<ProcessManager> = SpinLock::new(ProcessManager::new());
 
+/// Enumerate active processes under lock
+pub fn for_each_process<F: FnMut(&Process)>(mut f: F) {
+    let pm = PROCESS_MANAGER.lock();
+    for p in pm.processes.iter() {
+        if p.state != ProcessState::Unused {
+            f(p);
+        }
+    }
+}
+
 /// Global helper to spawn user process from ELF64 binary
 pub fn spawn_user_process(name: &str, elf_bytes: &[u8]) -> Result<u64, &'static str> {
     PROCESS_MANAGER.lock().spawn_elf(name, elf_bytes)
