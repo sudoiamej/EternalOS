@@ -14,6 +14,47 @@ EternalOS is an x86-64 operating system built from scratch with a Rust-first hyb
 
 ---
 
+## 📋 Prerequisites & System Requirements
+
+To build and run EternalOS locally, ensure the following host tools are installed and available on your system `PATH`:
+
+### 1. Operating System
+- **Windows 10 / 11** (PowerShell 5.1+ or PowerShell 7 Core)
+  - Also runs on Linux / macOS if adapting `run.ps1` to shell or running cargo and QEMU directly.
+
+### 2. Rust Toolchain (Nightly)
+- **Rustup:** [https://rustup.rs](https://rustup.rs)
+- **Rust Nightly Channel:**
+  ```powershell
+  rustup toolchain install nightly
+  ```
+- **Bare-metal x86-64 Target:**
+  ```powershell
+  rustup target add x86_64-unknown-none --toolchain nightly
+  ```
+- **LLVM Tools (optional, for disassembly/symbol inspection):**
+  ```powershell
+  rustup component add llvm-tools-preview --toolchain nightly
+  ```
+
+### 3. Hypervisor / Virtual Machine Emulator
+- **QEMU for Windows (x86_64):**
+  - Download from [https://www.qemu.org/download/#windows](https://www.qemu.org/download/#windows) or install via `winget`:
+    ```powershell
+    winget install SoftwareFreedomConservancy.QEMU
+    ```
+  - Standard installation directory: `C:\Program Files\qemu\`
+  - Required binaries: `qemu-system-x86_64.exe` and `qemu-img.exe`
+- **OVMF UEFI Firmware:**
+  - Provided bundled by default with QEMU for Windows at:
+    `C:\Program Files\qemu\share\edk2-x86_64-code.fd`
+  - (If installed in a custom location, verify this file path or update `run.ps1`).
+
+### 4. Git
+- **Git for Windows:** [https://git-scm.com/download/win](https://git-scm.com/download/win)
+
+---
+
 ## 📂 Repository Structure
 
 ```text
