@@ -1,18 +1,22 @@
 param(
     [switch]$Headless,
-    [switch]$Gdb
+    [switch]$Gdb,
+    [string]$Feature
 )
 
 $ErrorActionPreference = "Stop"
 
-# Refresh environment PATH to include Cargo and QEMU
 $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Program Files\qemu;$env:USERPROFILE\.cargo\bin"
 
 Write-Host ">>> [1/4] Building EternalOS Kernel (x86_64-unknown-none)..." -ForegroundColor Cyan
 Push-Location "$PSScriptRoot\kernel"
 try {
     $env:RUSTFLAGS = "-C relocation-model=static"
-    cargo build --target x86_64-unknown-none
+    $buildArgs = @("build", "--target", "x86_64-unknown-none")
+    if ($Feature) {
+        $buildArgs += @("--features", $Feature)
+    }
+    cargo @buildArgs
 } finally {
     Pop-Location
 }

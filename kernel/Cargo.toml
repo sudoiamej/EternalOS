@@ -3,6 +3,12 @@ name = "eternal_kernel"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+test-div-zero = []
+test-invalid-opcode = []
+test-panic = []
+
 [dependencies]
 limine = "0.5"
 
