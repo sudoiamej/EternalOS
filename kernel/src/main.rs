@@ -13,10 +13,13 @@ pub mod idt;
 pub mod mm;
 #[cfg(feature = "test-memory")]
 pub mod mm_tests;
+#[cfg(feature = "test-preempt")]
+pub mod preempt_tests;
 pub mod serial;
 pub mod task;
 #[cfg(feature = "test-task")]
 pub mod task_tests;
+pub mod timer;
 pub mod vm;
 
 /// Set Limine base revision
@@ -42,11 +45,11 @@ unsafe extern "C" fn kmain() -> ! {
 
     println!();
     println!("====================================================");
-    println!("       [Project EternalOS] - Phase 5 Kernel         ");
+    println!("       [Project EternalOS] - Phase 6 Kernel         ");
     println!("====================================================");
     log_info!("Architecture : x86-64 (AMD64 / Intel 64)");
     log_info!("Boot Protocol: Limine (Revision: Base)");
-    log_info!("Kernel Subsys: IDT, PMM, Paging, Heap & Tasking");
+    log_info!("Kernel Subsys: IDT, PMM, Heap, Tasking & Preemption");
 
     if BASE_REVISION.is_supported() {
         log_info!("Limine Base Revision handshake: Supported");
@@ -54,7 +57,7 @@ unsafe extern "C" fn kmain() -> ! {
         log_warn!("Limine Base Revision handshake: Not Supported");
     }
 
-    // 1. Initialize CPU Exceptions via IDT
+    // 1. Initialize CPU Exceptions and Timer IRQ in IDT
     idt::init();
 
     // 2. Initialize Framebuffer Output if available
@@ -94,10 +97,24 @@ unsafe extern "C" fn kmain() -> ! {
         log_error!("Failed to initialize Kernel Heap: {}", e);
     }
 
-    // 7. Initialize Kernel Tasking & Cooperative Scheduler
+    // 7. Initialize Kernel Tasking Subsystem
     task::init_tasking();
 
-    // 8. Test Hooks
+    // 8. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
+    timer::init_pit(100);
+
+    // 9. Enable CPU Interrupts
+    unsafe {
+        asm!("sti", options(nomem, nostack, preserves_flags));
+    }
+    log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
+
+    // 10. Test Hooks
+    #[cfg(feature = "test-preempt")]
+    {
+        preempt_tests::run_phase6_preemption_tests();
+    }
+
     #[cfg(feature = "test-task")]
     {
         task_tests::run_phase5_scheduler_tests();

@@ -11,6 +11,7 @@ test-panic = []
 test-memory = []
 test-heap = []
 test-task = []
+test-preempt = []
 
 [dependencies]
 limine = "0.5"
