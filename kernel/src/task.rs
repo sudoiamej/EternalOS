@@ -17,7 +17,9 @@ pub enum TaskState {
     Ready,
     Running,
     Blocked,
-    Terminated,
+    Sleeping(u64), // Wake deadline in timer ticks
+    Terminated,    // Exited; waiting for stack & resource reclamation
+    Dead,          // Resources reclaimed; slot available for reuse
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -92,11 +94,22 @@ impl Scheduler {
     }
 
     pub fn add_task(&mut self, task: Task) -> Result<u64, &'static str> {
+        // First look for completely empty None slots
         for slot in self.tasks.iter_mut() {
             if slot.is_none() {
                 let id = task.id;
                 *slot = Some(task);
                 return Ok(id);
+            }
+        }
+        // If no None slots, look for Dead slots whose resources have already been reclaimed
+        for slot in self.tasks.iter_mut() {
+            if let Some(t) = slot {
+                if t.state == TaskState::Dead {
+                    let id = task.id;
+                    *slot = Some(task);
+                    return Ok(id);
+                }
             }
         }
         Err("Scheduler task table full")
@@ -135,6 +148,13 @@ impl Scheduler {
         self.schedule_next();
     }
 
+    pub fn sleep_current(&mut self, deadline: u64) {
+        if let Some(ref mut t) = self.tasks[self.current] {
+            t.state = TaskState::Sleeping(deadline);
+        }
+        self.schedule_next();
+    }
+
     pub fn unblock(&mut self, task_id: u64) -> bool {
         for slot in self.tasks.iter_mut() {
             if let Some(t) = slot {
@@ -148,6 +168,61 @@ impl Scheduler {
             }
         }
         false
+    }
+
+    /// Wake up any sleeping tasks whose deadlines have arrived.
+    pub fn check_sleeping_tasks(&mut self, current_ticks: u64) -> usize {
+        let mut woken = 0;
+        for slot in self.tasks.iter_mut() {
+            if let Some(t) = slot {
+                if let TaskState::Sleeping(deadline) = t.state {
+                    if current_ticks >= deadline {
+                        t.state = TaskState::Ready;
+                        woken += 1;
+                    }
+                }
+            }
+        }
+        woken
+    }
+
+    /// Safely reclaim stacks and memory for terminated tasks (excluding the currently running task).
+    pub fn reclaim_terminated_tasks(&mut self) -> usize {
+        let mut reclaimed = 0;
+        for idx in 0..MAX_TASKS {
+            if idx == self.current {
+                // Never free the currently executing task's stack!
+                continue;
+            }
+
+            let mut should_reclaim = false;
+            let mut stack_base = 0u64;
+
+            if let Some(ref t) = self.tasks[idx] {
+                if t.state == TaskState::Terminated && t.id != 0 {
+                    should_reclaim = true;
+                    stack_base = t.stack_bottom.as_u64();
+                }
+            }
+
+            if should_reclaim {
+                // Unmap each 4KiB page and deallocate the physical frame back to the PMM
+                for page in 0..STACK_PAGES {
+                    let vaddr = VirtAddr::new(stack_base + (page * PAGE_SIZE) as u64);
+                    unsafe {
+                        if let Ok(pframe) = crate::vm::unmap_page(vaddr) {
+                            let _ = crate::mm::deallocate_frame(pframe);
+                        }
+                    }
+                }
+
+                if let Some(ref mut t) = self.tasks[idx] {
+                    t.state = TaskState::Dead;
+                }
+                reclaimed += 1;
+            }
+        }
+        reclaimed
     }
 
     pub fn schedule_next(&mut self) {
@@ -304,6 +379,69 @@ pub fn block_current_task() {
     SCHEDULER_LOCK.store(false, Ordering::Release);
 
     unsafe { asm!("sti", options(nomem, nostack, preserves_flags)) };
+}
+
+/// Put current task to sleep until the given number of ticks has passed.
+/// If ticks == 0, voluntarily yields CPU and returns immediately.
+pub fn sleep_ticks(ticks: u64) {
+    if ticks == 0 {
+        yield_now();
+        return;
+    }
+
+    let start_tick = crate::timer::get_ticks();
+    // Checked add prevents overflow when calculating sleep deadline
+    let deadline = start_tick.checked_add(ticks).unwrap_or(u64::MAX);
+
+    loop {
+        if crate::timer::get_ticks() >= deadline {
+            break;
+        }
+
+        unsafe { asm!("cli", options(nomem, nostack, preserves_flags)) };
+
+        while SCHEDULER_LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            core::hint::spin_loop();
+        }
+
+        unsafe {
+            #[allow(static_mut_refs)]
+            SCHEDULER.sleep_current(deadline);
+        }
+
+        SCHEDULER_LOCK.store(false, Ordering::Release);
+
+        // If schedule_next returned immediately because no other task is runnable,
+        // safely halt the CPU with interrupts enabled so the timer interrupt can fire
+        // and advance ticks until our deadline expires.
+        unsafe { asm!("sti; hlt", options(nomem, nostack, preserves_flags)) };
+    }
+}
+
+/// Put current task to sleep for the specified duration in milliseconds.
+pub fn sleep_ms(ms: u64) {
+    let ticks = crate::timer::ms_to_ticks(ms);
+    sleep_ticks(ticks);
+}
+
+/// Reclaim stack and page table resources of terminated tasks safely.
+pub fn reclaim_tasks() -> usize {
+    unsafe { asm!("cli", options(nomem, nostack, preserves_flags)) };
+
+    while SCHEDULER_LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
+
+    let count = unsafe {
+        #[allow(static_mut_refs)]
+        SCHEDULER.reclaim_terminated_tasks()
+    };
+
+    SCHEDULER_LOCK.store(false, Ordering::Release);
+
+    unsafe { asm!("sti", options(nomem, nostack, preserves_flags)) };
+
+    count
 }
 
 pub fn wake_task(task_id: u64) -> bool {

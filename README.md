@@ -46,10 +46,22 @@ EternalOS/
 │       ├── task_tests.rs   # Phase 5 cooperative multitasking test suite
 │       ├── preempt_tests.rs# Phase 6 hardware timer preemption test suite
 │       ├── sync.rs         # Phase 7 synchronization primitives: Mutex, Semaphore, WaitQueue, SpinLock
-│       └── sync_tests.rs   # Phase 7 synchronization verification suite
+│       ├── sync_tests.rs   # Phase 7 synchronization verification suite
+│       └── sleep_tests.rs  # Phase 8 kernel timers, sleep queues, and lifecycle test suite
 └── tools/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
+
+---
+
+## ⏱️ Kernel Timers, Sleep Queues & Task Lifecycle (Phase 8)
+
+### 1. Features & Invariants
+- **Kernel-Managed Sleep:** `sleep_ticks(ticks)` and `sleep_ms(ms)` put the running task into `TaskState::Sleeping(deadline)` without busy-waiting.
+- **PIT Integration:** Timer interrupts at 100 Hz advance ticks and atomically inspect sleeping tasks in `Scheduler::check_sleeping_tasks(now)`, transitioning expired tasks back to `TaskState::Ready`.
+- **Ceiling Conversion:** `ms_to_ticks(ms)` applies ceiling division (`(ms + MS_PER_TICK - 1) / MS_PER_TICK`) to guarantee tasks sleep for at least the requested duration.
+- **Resource Reclamation:** Terminated tasks transition from `Terminated` to `Dead` upon `reclaim_tasks()` / `reclaim_terminated_tasks()`, returning their 4-page allocated stack frames back to the Physical Frame Allocator via `unmap_page()` and `deallocate_frame()`.
+- **Slot Reuse & Monotonic IDs:** Completed/reclaimed tasks yield their task slots for new task allocation while maintaining strictly increasing task IDs (`next_task_id`), preventing ABA issues.
 
 ---
 
@@ -73,13 +85,14 @@ EternalOS/
 .\run.ps1 -Headless
 ```
 
-### 2. Run Phase 7 Task Synchronization Tests
+### 2. Run Phase 8 Kernel Timers & Sleep Tests
 ```powershell
-.\run.ps1 -Headless -Feature test-sync
+.\run.ps1 -Headless -Feature test-sleep
 ```
 
 ### 3. Run Prior Subsystem Test Suites (Regression Verification)
 ```powershell
+.\run.ps1 -Headless -Feature test-sync
 .\run.ps1 -Headless -Feature test-preempt
 .\run.ps1 -Headless -Feature test-task
 .\run.ps1 -Headless -Feature test-heap

@@ -13,6 +13,7 @@ test-heap = []
 test-task = []
 test-preempt = []
 test-sync = []
+test-sleep = []
 
 [dependencies]
 limine = "0.5"

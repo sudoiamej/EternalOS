@@ -50,6 +50,16 @@ impl WaitQueue {
     pub fn len(&self) -> usize {
         self.count
     }
+
+    pub fn contains(&self, task_id: u64) -> bool {
+        for i in 0..self.count {
+            let idx = (self.head + i) % MAX_TASKS;
+            if self.waiters[idx] == task_id {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// A kernel spinlock used solely to protect synchronization metadata (WaitQueues)

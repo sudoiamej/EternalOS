@@ -118,17 +118,23 @@ pub extern "x86-interrupt" fn general_protection_handler(
 
 /// Hardware Timer Interrupt Handler (IRQ0 -> Vector 32)
 pub extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    let current_ticks = TIMER_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
     send_eoi();
 
-    // If preemption is possible and scheduler is unlocked, record preemption event
+    // If preemption is possible and scheduler is unlocked, record preemption event and wake sleeping tasks
     if SCHEDULER_LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok() {
         PREEMPTION_COUNT.fetch_add(1, Ordering::Relaxed);
 
         unsafe {
             #[allow(static_mut_refs)]
-            if SCHEDULER.has_runnable_workers() {
-                SCHEDULER.schedule_next();
+            {
+                // 1. Wake any sleeping tasks whose deadlines have arrived
+                SCHEDULER.check_sleeping_tasks(current_ticks);
+
+                // 2. Schedule next runnable task if runnable workers exist
+                if SCHEDULER.has_runnable_workers() {
+                    SCHEDULER.schedule_next();
+                }
             }
         }
 

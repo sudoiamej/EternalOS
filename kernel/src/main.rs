@@ -20,6 +20,8 @@ pub mod sync;
 #[cfg(feature = "test-sync")]
 pub mod sync_tests;
 pub mod task;
+#[cfg(feature = "test-sleep")]
+pub mod sleep_tests;
 #[cfg(feature = "test-task")]
 pub mod task_tests;
 pub mod timer;
@@ -113,6 +115,11 @@ unsafe extern "C" fn kmain() -> ! {
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
     // 10. Test Hooks
+    #[cfg(feature = "test-sleep")]
+    {
+        sleep_tests::run_phase8_sleep_tests();
+    }
+
     #[cfg(feature = "test-sync")]
     {
         sync_tests::run_phase7_sync_tests();

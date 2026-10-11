@@ -2,6 +2,8 @@ use core::arch::asm;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 pub const IRQ0_VECTOR: u8 = 32;
+pub const PIT_HZ: u64 = 100;
+pub const MS_PER_TICK: u64 = 1000 / PIT_HZ; // 10ms per tick
 
 // 8259 PIC I/O Ports
 const PIC1_COMMAND: u16 = 0x20;
@@ -102,4 +104,23 @@ pub fn init_pit(hz: u32) {
 
 pub fn get_ticks() -> u64 {
     TIMER_TICKS.load(Ordering::Relaxed)
+}
+
+/// Convert milliseconds to ticks, rounding UP so we never shorten requested sleep duration.
+/// If ms == 0, returns 0.
+pub fn ms_to_ticks(ms: u64) -> u64 {
+    if ms == 0 {
+        0
+    } else {
+        // Ceiling division: (ms + MS_PER_TICK - 1) / MS_PER_TICK
+        match ms.checked_add(MS_PER_TICK - 1) {
+            Some(sum) => sum / MS_PER_TICK,
+            None => u64::MAX / MS_PER_TICK, // Saturate on overflow
+        }
+    }
+}
+
+/// Convert ticks to approximate milliseconds.
+pub fn ticks_to_ms(ticks: u64) -> u64 {
+    ticks.saturating_mul(MS_PER_TICK)
 }

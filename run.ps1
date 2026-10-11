@@ -17,6 +17,9 @@ try {
         $buildArgs += @("--features", $Feature)
     }
     cargo @buildArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cargo build failed with exit code $LASTEXITCODE"
+    }
 } finally {
     Pop-Location
 }
