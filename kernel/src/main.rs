@@ -44,6 +44,9 @@ pub mod block;
 pub mod virtio_blk;
 #[cfg(feature = "test-storage")]
 pub mod storage_tests;
+pub mod partition;
+#[cfg(feature = "test-partitions")]
+pub mod partition_tests;
 pub mod timer;
 pub mod vm;
 
@@ -122,6 +125,10 @@ unsafe extern "C" fn kmain() -> ! {
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
     // 13. Test Hooks
+    #[cfg(feature = "test-partitions")]
+    {
+        partition_tests::run_phase14a_partition_tests();
+    }
     #[cfg(feature = "test-storage")]
     {
         storage_tests::run_phase13b_storage_tests();

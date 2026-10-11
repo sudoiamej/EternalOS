@@ -59,6 +59,37 @@ EternalOS/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
 
+## 🗂️ Read-Only GPT & MBR Partition Table Parsing (Phase 14A)
+
+### 1. Architecture & Capabilities
+- **Normalized Partition Representation (`partition.rs`):**
+  - Unified `Partition` struct: start LBA, sector count, exclusive end LBA, table type (`MBR` or `GPT`), partition type (`Mbr(u8)` or `Gpt(Guid)`), unique partition GUID, attributes, UTF-8 name (safely decoded from UTF-16LE), and bootable indicator.
+  - Bounded static registry (`PartitionTable`, up to 16 partitions): zero dynamic heap allocation during early initialization.
+  - Granular error model (`PartitionError`): captures signature invalidity, CRC32 mismatches, boundary violations, overlapping partitions, duplicate GUIDs, and unsupported geometries.
+- **Legacy MBR Parser:**
+  - Validates `0x55AA` boot signature at sector 0 bytes 510..511.
+  - Validates boot indicators (`0x00` or `0x80`), partition types, and non-empty entries.
+  - Detects GPT Protective MBRs (`type == 0xEE`) and transparently routes parsing to GPT.
+  - Detects extended partition types (`0x05`, `0x0F`, `0x85`) and reports documented rejection rather than misinterpreting as primary partitions.
+  - Enforces boundary limits against device capacity and overlapping partition checks.
+- **GUID Partition Table (GPT) Parser:**
+  - Verifies `"EFI PART"` signature at LBA 1 and header size boundaries (92..=512 bytes).
+  - Validates Header CRC32 (with CRC field cleared) via IEEE 802.3 standard implementation.
+  - Verifies disk GUID, current LBA (1), backup LBA, and usable LBA ranges against device capacity.
+  - Reads and validates partition entry array CRC32.
+  - Decodes mixed-endian GUIDs and UTF-16LE partition names with fallback replacement for unmapped code points.
+  - Enforces usable LBA boundaries, duplicate unique GUID prevention, and non-overlapping partitions.
+- **Strict Read-Only Execution:**
+  - Parser exclusively issues `read_sectors` operations against the underlying block device; no write requests are issued.
+- **Deterministic Test Suite (`test-partitions`):**
+  - Test 1: IEEE 802.3 standard CRC32 algorithm verification against standard check vectors.
+  - Test 2: GUID little-endian parsing, formatting, and zero-checks.
+  - Test 3: Synthetic MBR scenarios (valid empty, valid primary, missing signature, invalid boot indicator, out of bounds, overlapping partitions, extended partition rejection, protective MBR detection).
+  - Test 4: Synthetic GPT scenarios (valid single partition, header CRC mismatch, entry array CRC mismatch, invalid header size, partition out of usable range).
+  - Test 5: Real VirtIO hardware partition discovery and validation against attached QEMU disks.
+
+---
+
 ## 💾 Block Storage Foundation & VirtIO Driver (Phase 13B)
 
 ### 1. Architecture & Capabilities

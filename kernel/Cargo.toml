@@ -23,6 +23,7 @@ test-arch = []
 test-pci = []
 test-graphics = []
 test-storage = []
+test-partitions = []
 
 [dependencies]
 limine = "0.5"
