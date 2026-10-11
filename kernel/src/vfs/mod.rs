@@ -3,10 +3,12 @@ use core::fmt;
 pub mod path;
 pub mod ramfs;
 pub mod router;
+pub mod eternalfs;
 
 pub use router::{init, with_vfs, VfsRouter};
 pub use path::normalize_path;
 pub use ramfs::RamFs;
+pub use eternalfs::EternalFs;
 
 /// Maximum length of a single path component or file name.
 pub const MAX_NAME_LEN: usize = 64;

@@ -50,6 +50,8 @@ pub mod partition_tests;
 pub mod vfs;
 #[cfg(feature = "test-vfs")]
 pub mod vfs_tests;
+#[cfg(feature = "test-eternalfs")]
+pub mod eternalfs_tests;
 pub mod timer;
 pub mod vm;
 
@@ -131,6 +133,10 @@ unsafe extern "C" fn kmain() -> ! {
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
     // 14. Test Hooks
+    #[cfg(feature = "test-eternalfs")]
+    {
+        eternalfs_tests::run_phase14c_eternalfs_tests();
+    }
     #[cfg(feature = "test-vfs")]
     {
         vfs_tests::run_phase14b_vfs_tests();

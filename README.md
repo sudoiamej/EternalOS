@@ -59,6 +59,30 @@ EternalOS/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
 
+## 📂 EternalFS Read-Only On-Disk Filesystem (Phase 14C)
+
+### 1. Architecture & Specification (`docs/eternalfs-spec.md`)
+- **On-Disk Binary Format:**
+  - Standard filesystem block size: `1024` bytes (2 physical 512-byte sectors per block).
+  - Superblock at Block 1 (LBA 2 within partition): Magic `ETERNAL1`, version `1`, block size `1024`, total blocks, total inodes, inode table block, data block start, root inode (`1`), feature flags, and IEEE 802.3 CRC32 checksum.
+  - Inode Table: 64-byte records, 1-indexed. Contains node type (Regular File / Directory), permission flags, 64-bit file size, 10 direct block pointers (`10 * 1024 = 10,240` bytes capacity), 1 single indirect block pointer (`+ 256 KiB`), and CRC32 checksum.
+  - Directory Entries: Contiguous 32-byte records storing referenced inode ID, type, filename length, and up to 26 bytes of ASCII/UTF-8 filename string.
+- **Read-Only Driver Implementation (`vfs/eternalfs.rs`):**
+  - Implements the Phase 14B `FileSystem` trait for any `BlockDevice + Send + Sync`.
+  - Safe interior mutability using `SpinLock<D>` wrapper for block device I/O.
+  - Full path lookup (`lookup`), metadata retrieval (`get_metadata`), sequential and offset-based file reading (`read`), cross-block boundary reads, sparse hole zero-filling, and directory enumeration (`readdir`).
+  - Read-Only Invariants Enforced: Mutation operations (`write`, `truncate`, `create_file`, `create_dir`) are strictly rejected with `VfsError::PermissionDenied`.
+- **Host-Side Fixture Generator (`tools/make_eternalfs.ps1`):**
+  - Formats test partitions on disposable raw images (`$env:TEMP\eternalos_test_disk.img`).
+  - Generates known fixtures: `/hello.txt`, `/empty.txt` (0 bytes, EOF validation), `/multiblock.txt` (1,500 bytes spanning direct blocks with 'A' and 'B' patterns), and `/docs/kernel.txt` (nested directory).
+- **Deterministic Test Suite (`test-eternalfs`):**
+  - Test 1: Superblock decoding, version checks, CRC verification, bad magic rejection, and partition boundary checks.
+  - Test 2: Inode decoding, CRC32 validation, and illegal node type rejection.
+  - Test 3: In-memory synthetic filesystem unit testing: directory traversal, file offset reads, cross-block boundary reading, EOF handling, directory enumeration, and write permission denial.
+  - Test 4: Real hardware integration test on VirtIO block controller: partition discovery -> EternalFS mount -> `/hello.txt` lookup & read -> `/empty.txt` EOF check -> `/multiblock.txt` cross-block verification -> `/docs/kernel.txt` nested read -> root directory enumeration.
+
+---
+
 ## 📁 Virtual Filesystem (VFS) Layer & RamFs (Phase 14B)
 
 ### 1. Architecture & Capabilities
@@ -249,7 +273,32 @@ EternalOS/
 .\run.ps1 -Headless
 ```
 
-### 2. Run Phase 12 PCI Enumeration & Hardware Discovery Tests
+### 2. Run Phase 14C EternalFS Read-Only Filesystem Tests
+```powershell
+.\run.ps1 -Headless -Feature test-eternalfs
+```
+
+### 3. Run Phase 14B Virtual Filesystem (VFS) Tests
+```powershell
+.\run.ps1 -Headless -Feature test-vfs
+```
+
+### 4. Run Phase 14A Partition Discovery Tests
+```powershell
+.\run.ps1 -Headless -Feature test-partitions
+```
+
+### 5. Run Phase 13B Block Storage & VirtIO Tests
+```powershell
+.\run.ps1 -Headless -Feature test-storage
+```
+
+### 6. Run Phase 13A Graphics Tests
+```powershell
+.\run.ps1 -Headless -Feature test-graphics
+```
+
+### 7. Run Phase 12 PCI Enumeration & Hardware Discovery Tests
 ```powershell
 .\run.ps1 -Headless -Feature test-pci
 ```

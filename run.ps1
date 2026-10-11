@@ -52,6 +52,8 @@ $testDisk = "$env:TEMP\eternalos_test_disk.img"
 if (-not (Test-Path $testDisk)) {
     & "C:\Program Files\qemu\qemu-img.exe" create -f raw $testDisk 10M | Out-Null
 }
+# Format test disk with valid EternalFS filesystem on Partition 0
+& powershell -ExecutionPolicy Bypass -File "$PSScriptRoot\tools\make_eternalfs.ps1" -ImagePath $testDisk | Out-Null
 
 $qemuArgs = @(
     "-M", "q35",
