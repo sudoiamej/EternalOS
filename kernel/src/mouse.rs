@@ -140,15 +140,15 @@ pub fn init() {
         }
     }
 
-    // 2. Read config byte and enable IRQ12 (bit 1) and disable clock inhibit (bit 5)
+    // 2. Read config byte and enable IRQ12 (bit 1), keep IRQ1 (bit 0), keep translation (bit 6), disable clock inhibit (bit 5)
     if wait_write() {
         unsafe {
             outb(PS2_COMMAND_PORT, 0x20);
             io_wait();
         }
         if let Some(mut config) = mouse_read() {
-            config |= 0x02; // Enable auxiliary interrupt IRQ12
-            config &= !0x20; // Disable auxiliary clock disable bit
+            config |= 0x01 | 0x02 | 0x40; // Enable Keyboard (bit 0), Mouse (bit 1), Scancode translation (bit 6)
+            config &= !0x30;              // Disable clock disable bits (bit 4: keyboard, bit 5: mouse)
 
             if wait_write() {
                 unsafe {
@@ -191,15 +191,20 @@ pub fn handle_interrupt() {
         return;
     }
 
-    // Verify byte came from auxiliary port (bit 5)
-    let is_mouse_byte = (status & 0x20) != 0;
+    let is_aux = (status & 0x20) != 0;
     let byte = unsafe { inb(PS2_DATA_PORT) };
     send_eoi_irq(12);
 
-    if !is_mouse_byte {
-        return;
+    if is_aux {
+        process_mouse_byte(byte);
+    } else {
+        // A keyboard byte arrived on controller while IRQ12 fired
+        crate::keyboard::process_keyboard_byte(byte);
     }
+}
 
+/// Process a single byte received from PS/2 mouse
+pub fn process_mouse_byte(byte: u8) {
     let mut driver = MOUSE_DRIVER.lock();
 
     // Packet synchronization: byte 0 must have bit 3 set to 1

@@ -46,10 +46,10 @@ pub fn wait_controller_ready() -> bool {
     false
 }
 
-/// Check if PS/2 controller has keyboard data ready (Bit 0 set, Bit 5 clear)
+/// Check if PS/2 controller has any output data ready in port 0x60
 pub unsafe fn has_data() -> bool {
     let status = unsafe { inb(PS2_STATUS_PORT) };
-    (status & 0x01) != 0 && (status & 0x20) == 0
+    (status & 0x01) != 0
 }
 
 /// Wait until controller output buffer has data to read
@@ -398,11 +398,46 @@ pub fn init() {
 
 /// Handle Keyboard Interrupt (IRQ1 -> Vector 33)
 pub fn handle_interrupt() {
-    let scancode = unsafe { inb(PS2_DATA_PORT) };
+    let status = unsafe { inb(PS2_STATUS_PORT) };
+    if (status & 0x01) == 0 {
+        send_eoi_irq(1);
+        return;
+    }
+
+    let is_aux = (status & 0x20) != 0;
+    let byte = unsafe { inb(PS2_DATA_PORT) };
     send_eoi_irq(1);
 
+    if is_aux {
+        // Data belongs to auxiliary mouse port, dispatch to mouse driver
+        crate::mouse::process_mouse_byte(byte);
+        return;
+    }
+
+    process_keyboard_byte(byte);
+}
+
+/// Poll PS/2 controller data port synchronously without sending hardware interrupt EOI
+pub fn poll_data() {
+    let status = unsafe { inb(PS2_STATUS_PORT) };
+    if (status & 0x01) == 0 {
+        return;
+    }
+
+    let is_aux = (status & 0x20) != 0;
+    let byte = unsafe { inb(PS2_DATA_PORT) };
+
+    if is_aux {
+        crate::mouse::process_mouse_byte(byte);
+    } else {
+        process_keyboard_byte(byte);
+    }
+}
+
+/// Process a single scancode byte received from PS/2 keyboard
+pub fn process_keyboard_byte(byte: u8) {
     let mut decoder = KEYBOARD_DECODER.lock();
-    if let Some(event) = decoder.process_byte(scancode) {
+    if let Some(event) = decoder.process_byte(byte) {
         post_event(event);
 
         if let InputEvent::KeyDown { ascii: Some(ch), .. } = event {

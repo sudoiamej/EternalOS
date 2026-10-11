@@ -26,8 +26,10 @@ pub fn run_interactive_shell() {
         let mut line_len = 0usize;
 
         // Read line
+        crate::console::draw_text_cursor(true);
         loop {
             if let Some(b) = console_read_byte() {
+                crate::console::draw_text_cursor(false);
                 if b == b'\r' || b == b'\n' {
                     console_write("\r\n");
                     break;
@@ -44,10 +46,12 @@ pub fn run_interactive_shell() {
                         console_write_byte(b);
                     }
                 }
+                crate::console::draw_text_cursor(true);
             } else {
                 core::hint::spin_loop();
             }
         }
+        crate::console::draw_text_cursor(false);
 
         let input_str = match core::str::from_utf8(&line_buf[..line_len]) {
             Ok(s) => s.trim(),
@@ -65,17 +69,21 @@ pub fn run_interactive_shell() {
 
         match cmd {
             "help" => {
-                console_write("Supported shell commands:\r\n");
+                console_write("EternalOS Shell Commands (15 available):\r\n");
                 console_write("  help       - Display this list of commands\r\n");
                 console_write("  clear      - Clear terminal screen\r\n");
                 console_write("  echo <msg> - Print message to terminal\r\n");
                 console_write("  pwd        - Print current working directory\r\n");
-                console_write("  ls         - List files in current directory\r\n");
+                console_write("  ls [dir]   - List files and directories\r\n");
                 console_write("  cd <dir>   - Change current working directory\r\n");
                 console_write("  cat <file> - Print contents of file\r\n");
                 console_write("  stat <path>- Display file or directory metadata\r\n");
-                console_write("  uname      - Print operating system & architecture info\r\n");
-                console_write("  meminfo    - Display physical memory statistics\r\n");
+                console_write("  uname      - Print operating system & kernel info\r\n");
+                console_write("  meminfo    - Display physical memory frame stats\r\n");
+                console_write("  lspci      - List enumerated PCI/PCIe hardware devices\r\n");
+                console_write("  uptime     - Display system uptime and PIT timer ticks\r\n");
+                console_write("  mouse      - Display mouse pointer status and coordinates\r\n");
+                console_write("  vfsinfo    - Display root filesystem & mount status\r\n");
                 console_write("  exit       - Exit interactive shell\r\n");
             }
 
@@ -264,6 +272,76 @@ pub fn run_interactive_shell() {
                 }
             }
 
+            "lspci" => {
+                let count = crate::pci::get_device_count();
+                console_write("Discovered PCI Devices (");
+                let mut c_buf = [0u8; 32];
+                console_write(format_u64(count as u64, &mut c_buf));
+                console_write(" total):\r\n");
+
+                crate::pci::with_pci_registry(|reg| {
+                    for dev in reg.devices().iter().take(16) {
+                        console_write("  [");
+                        let mut b_buf = [0u8; 32];
+                        console_write(format_u64(dev.bus as u64, &mut b_buf));
+                        console_write(":");
+                        console_write(format_u64(dev.device as u64, &mut b_buf));
+                        console_write(".");
+                        console_write(format_u64(dev.function as u64, &mut b_buf));
+                        console_write("] ");
+                        console_write(dev.class_name());
+                        console_write(" (Vendor: 0x");
+                        console_write(format_hex_u16(dev.vendor_id, &mut b_buf));
+                        console_write(", Device: 0x");
+                        console_write(format_hex_u16(dev.device_id, &mut b_buf));
+                        console_write(")\r\n");
+                    }
+                });
+            }
+
+            "uptime" => {
+                let ticks = crate::timer::get_ticks();
+                let seconds = ticks / crate::timer::PIT_HZ;
+                let ms = (ticks % crate::timer::PIT_HZ) * 10;
+                let mut u_buf = [0u8; 32];
+                console_write("System Uptime: ");
+                console_write(format_u64(seconds, &mut u_buf));
+                console_write("s ");
+                console_write(format_u64(ms, &mut u_buf));
+                console_write("ms (Ticks: ");
+                console_write(format_u64(ticks, &mut u_buf));
+                console_write(" @ 100 Hz)\r\n");
+            }
+
+            "mouse" => {
+                let (x, y, lb, rb, mb) = {
+                    let ptr = crate::input::POINTER.lock();
+                    (ptr.x, ptr.y, ptr.left_button, ptr.right_button, ptr.middle_button)
+                };
+                let mut m_buf = [0u8; 32];
+                console_write("PS/2 Mouse Subsystem Status:\r\n");
+                console_write("  Coordinates: X=");
+                console_write(format_u64(x as u64, &mut m_buf));
+                console_write(", Y=");
+                console_write(format_u64(y as u64, &mut m_buf));
+                console_write("\r\n  Buttons    : Left=");
+                console_write(if lb { "DOWN" } else { "UP" });
+                console_write(", Right=");
+                console_write(if rb { "DOWN" } else { "UP" });
+                console_write(", Middle=");
+                console_write(if mb { "DOWN" } else { "UP" });
+                console_write("\r\n  Hardware   : IRQ12 / Vector 44 (Streaming Mode)\r\n");
+            }
+
+            "vfsinfo" => {
+                console_write("Virtual Filesystem (VFS) Topology:\r\n");
+                console_write("  Root Mount   : / (RamFs in-memory backend)\r\n");
+                console_write("  EternalFS    : Supported (/disk)\r\n");
+                console_write("  Active CWD   : ");
+                console_write(cwd_str);
+                console_write("\r\n");
+            }
+
             "exit" => {
                 console_write("Shell exited. Halting session.\r\n");
                 break;
@@ -289,4 +367,13 @@ fn format_u64(mut n: u64, buf: &mut [u8; 32]) -> &str {
         i -= 1;
     }
     core::str::from_utf8(&buf[i + 1..32]).unwrap_or("0")
+}
+
+fn format_hex_u16(n: u16, buf: &mut [u8; 32]) -> &str {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    buf[0] = HEX[((n >> 12) & 0xF) as usize];
+    buf[1] = HEX[((n >> 8) & 0xF) as usize];
+    buf[2] = HEX[((n >> 4) & 0xF) as usize];
+    buf[3] = HEX[(n & 0xF) as usize];
+    core::str::from_utf8(&buf[..4]).unwrap_or("0000")
 }

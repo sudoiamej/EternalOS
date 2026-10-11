@@ -191,6 +191,21 @@ pub fn console_write(s: &str) {
     }
 }
 
+/// Render or clear text cursor box at active cursor position
+pub fn draw_text_cursor(visible: bool) {
+    with_framebuffer(|fb| {
+        let con = CONSOLE.lock();
+        let bg_color = if con.in_terminal_panel {
+            Color::PANEL_BG
+        } else {
+            Color::DARK_BG
+        };
+        let color = if visible { Color::ACCENT_CYAN } else { bg_color };
+        // Draw 8x2 underline or 8x14 cursor bar
+        fb.fill_rect(Rect::new(con.cursor_x, con.cursor_y + 13, 8, 2), color);
+    });
+}
+
 /// Read a single byte from console input (checks keyboard input queue first, then polled PS/2, then UART COM1)
 pub fn console_read_byte() -> Option<u8> {
     // 1. Buffered characters from interrupt handler
@@ -200,7 +215,7 @@ pub fn console_read_byte() -> Option<u8> {
 
     // 2. Poll PS/2 controller directly (covers cases where guest interrupts are temporarily disabled or unrouted)
     if unsafe { crate::keyboard::has_data() } {
-        crate::keyboard::handle_interrupt();
+        crate::keyboard::poll_data();
         if let Some(b) = crate::input::pop_char() {
             return Some(b);
         }

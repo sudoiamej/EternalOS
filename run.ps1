@@ -32,7 +32,11 @@ if (-not (Test-Path $kernelBin)) {
 Write-Host ">>> [2/4] Staging Boot Directory Structure..." -ForegroundColor Cyan
 $stageDir = "$env:TEMP\eternalos_boot_stage"
 if (Test-Path $stageDir) {
-    Remove-Item -Recurse -Force $stageDir
+    try {
+        Remove-Item -Recurse -Force $stageDir -ErrorAction Stop
+    } catch {
+        $stageDir = "$env:TEMP\eternalos_boot_stage_" + [System.Diagnostics.Process]::GetCurrentProcess().Id
+    }
 }
 New-Item -ItemType Directory -Path "$stageDir\EFI\BOOT" -Force | Out-Null
 New-Item -ItemType Directory -Path "$stageDir\boot\limine" -Force | Out-Null
