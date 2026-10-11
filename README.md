@@ -49,10 +49,37 @@ EternalOS/
 │       ├── sync_tests.rs   # Phase 7 synchronization verification suite
 │       ├── sleep_tests.rs  # Phase 8 kernel timers, sleep queues, and lifecycle test suite
 │       ├── reliability_tests.rs # Phase 9 reliability, diagnostics, and invariant verification suite
-│       └── vmem_tests.rs   # Phase 10 advanced virtual memory & page-table test suite
+│       ├── vmem_tests.rs   # Phase 10 advanced virtual memory & page-table test suite
+│       ├── cpu.rs          # Phase 11 CPUID discovery & soft-float execution policy
+│       ├── gdt.rs          # Phase 11 GDT, TSS, and IST exception stack configuration
+│       ├── arch_tests.rs   # Phase 11 CPU architecture & interrupt hardening test suite
+│       ├── pci.rs          # Phase 12 PCI configuration mechanism #1, BAR parser, device registry
+│       └── pci_tests.rs    # Phase 12 PCI discovery & hardware enumeration test suite
 └── tools/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
+
+---
+
+## 🔌 PCI/PCIe Enumeration & Hardware Discovery (Phase 12)
+
+### 1. Architecture & Capabilities
+- **Configuration Mechanism #1 Access:** Encapsulated I/O-port access (`0xCF8` address, `0xCFC` data) protected by interrupt-safe `SpinLock`.
+- **Bounds & Alignment Validation:** Validates bus (0..255), device (0..31), function (0..7), and register offset alignments (32-bit dword, 16-bit word, 8-bit byte).
+- **Safe Hardware Discovery:** Distinguishes absent devices (`0xFFFF`), parses single-function vs multifunction devices (bit 7 of header type), and enumerates secondary buses discovered via Type 1 PCI-to-PCI bridges.
+- **Resource & BAR Interpretation:** Pure, non-destructive parsing of Type 0 (6 BARs) and Type 1 (2 BARs) headers, decoding I/O ports vs 32-bit / 64-bit MMIO addresses and prefetchability flags without writing or probing registers.
+- **Bounded Registry:** Thread-safe global `PciRegistry` holding discovered functions with deterministic overflow tracking.
+
+---
+
+## ⚙️ CPU Architecture & Interrupt Infrastructure Hardening (Phase 11)
+
+### 1. Architecture & Invariants
+- **Dedicated 64-bit GDT:** Standard 64-bit kernel code (`0x28`) and data (`0x30`) descriptors reloaded via `retfq` far jump.
+- **Task State Segment (TSS) & IST:** 64-bit TSS descriptor (`0x38`) loaded with `ltr`, configuring dedicated 16 KiB 16-byte aligned exception stack for `IST1` bound to Double Fault (`#DF`, vector 8).
+- **CPUID Capability Detection:** Discovers Long Mode, NX bit, APIC, PAE, and SIMD features, enforcing soft-float integer kernel execution policy.
+
+---
 
 ---
 
@@ -115,7 +142,17 @@ EternalOS/
 .\run.ps1 -Headless
 ```
 
-### 2. Run Phase 10 Virtual Memory & Page Table Tests
+### 2. Run Phase 12 PCI Enumeration & Hardware Discovery Tests
+```powershell
+.\run.ps1 -Headless -Feature test-pci
+```
+
+### 3. Run Phase 11 CPU Architecture & Interrupt Hardening Tests
+```powershell
+.\run.ps1 -Headless -Feature test-arch
+```
+
+### 4. Run Phase 10 Virtual Memory & Page Table Tests
 ```powershell
 .\run.ps1 -Headless -Feature test-vmem
 ```

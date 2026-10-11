@@ -32,6 +32,9 @@ pub mod reliability_tests;
 pub mod vmem_tests;
 #[cfg(feature = "test-arch")]
 pub mod arch_tests;
+pub mod pci;
+#[cfg(feature = "test-pci")]
+pub mod pci_tests;
 pub mod timer;
 pub mod vm;
 
@@ -119,16 +122,23 @@ unsafe extern "C" fn kmain() -> ! {
     // 7. Initialize Kernel Tasking Subsystem
     task::init_tasking();
 
-    // 8. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
+    // 8. Discover PCI/PCIe Hardware & Enumerate Buses (Mechanism #1)
+    pci::init();
+
+    // 9. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
     timer::init_pit(100);
 
-    // 9. Enable CPU Interrupts
+    // 10. Enable CPU Interrupts
     unsafe {
         asm!("sti", options(nomem, nostack, preserves_flags));
     }
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
-    // 10. Test Hooks
+    // 11. Test Hooks
+    #[cfg(feature = "test-pci")]
+    {
+        pci_tests::run_phase12_pci_tests();
+    }
     #[cfg(feature = "test-sleep")]
     {
         sleep_tests::run_phase8_sleep_tests();

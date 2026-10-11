@@ -20,6 +20,7 @@ test-pagefault = []
 test-vmem = []
 test-vmem-fault = []
 test-arch = []
+test-pci = []
 
 [dependencies]
 limine = "0.5"
