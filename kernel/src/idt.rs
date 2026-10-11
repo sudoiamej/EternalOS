@@ -59,6 +59,28 @@ impl IdtEntry {
         self.pointer_high = (handler >> 32) as u32;
         self.reserved = 0;
     }
+
+    pub fn set_handler_ist(&mut self, handler: usize, ist_index: u8) {
+        self.set_handler(handler);
+        // IST index is in bits 2:0 of options word (offset 4, lower byte)
+        self.options = (self.options & !0x0007) | ((ist_index as u16) & 0x0007);
+    }
+
+    pub fn gdt_selector(&self) -> u16 {
+        self.gdt_selector
+    }
+
+    pub fn options(&self) -> u16 {
+        self.options
+    }
+
+    pub fn ist_index(&self) -> u8 {
+        (self.options & 0x0007) as u8
+    }
+
+    pub fn is_present(&self) -> bool {
+        (self.options & 0x8000) != 0
+    }
 }
 
 #[repr(C, align(16))]
@@ -210,7 +232,7 @@ pub fn init() {
     unsafe {
         IDT.entries[0].set_handler(divide_by_zero_handler as *const () as usize);
         IDT.entries[6].set_handler(invalid_opcode_handler as *const () as usize);
-        IDT.entries[8].set_handler(double_fault_handler as *const () as usize);
+        IDT.entries[8].set_handler_ist(double_fault_handler as *const () as usize, 1); // IST1
         IDT.entries[10].set_handler(invalid_tss_handler as *const () as usize);
         IDT.entries[12].set_handler(stack_segment_fault_handler as *const () as usize);
         IDT.entries[13].set_handler(general_protection_handler as *const () as usize);
@@ -225,5 +247,13 @@ pub fn init() {
         asm!("lidt [{}]", in(reg) &idt_ptr, options(readonly, nostack, preserves_flags));
     }
 
-    crate::log_info!("Interrupt Descriptor Table (IDT) loaded with enhanced CPU exceptions and Timer IRQ0.");
+    crate::log_info!("Interrupt Descriptor Table (IDT) loaded with enhanced CPU exceptions, IST1 (#DF), and Timer IRQ0.");
+}
+
+pub fn get_idt_entry(vector: usize) -> Option<IdtEntry> {
+    if vector < 256 {
+        Some(unsafe { IDT.entries[vector] })
+    } else {
+        None
+    }
 }

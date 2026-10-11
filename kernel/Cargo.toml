@@ -19,6 +19,7 @@ test-gpf = []
 test-pagefault = []
 test-vmem = []
 test-vmem-fault = []
+test-arch = []
 
 [dependencies]
 limine = "0.5"

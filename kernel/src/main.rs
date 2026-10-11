@@ -6,6 +6,8 @@ use core::arch::asm;
 use limine::BaseRevision;
 use limine::request::{FramebufferRequest, RequestsEndMarker, RequestsStartMarker};
 
+pub mod cpu;
+pub mod gdt;
 pub mod heap;
 #[cfg(feature = "test-heap")]
 pub mod heap_tests;
@@ -28,6 +30,8 @@ pub mod task_tests;
 pub mod reliability_tests;
 #[cfg(feature = "test-vmem")]
 pub mod vmem_tests;
+#[cfg(feature = "test-arch")]
+pub mod arch_tests;
 pub mod timer;
 pub mod vm;
 
@@ -66,7 +70,13 @@ unsafe extern "C" fn kmain() -> ! {
         log_warn!("Limine Base Revision handshake: Not Supported");
     }
 
-    // 1. Initialize CPU Exceptions and Timer IRQ in IDT
+    // 1. Initialize GDT, TSS, and IST Exception Stacks
+    gdt::init();
+
+    // 2. Discover and Log CPU Hardware Capabilities (CPUID)
+    cpu::log_cpu_capabilities();
+
+    // 3. Initialize CPU Exceptions and Timer IRQ in IDT (binds IST1 to #DF)
     idt::init();
 
     // 2. Initialize Framebuffer Output if available
@@ -157,6 +167,11 @@ unsafe extern "C" fn kmain() -> ! {
     #[cfg(feature = "test-vmem")]
     {
         vmem_tests::run_phase10_vmem_tests();
+    }
+
+    #[cfg(feature = "test-arch")]
+    {
+        arch_tests::run_phase11_arch_tests();
     }
 
     #[cfg(feature = "test-vmem-fault")]
