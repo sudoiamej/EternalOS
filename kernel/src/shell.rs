@@ -1,4 +1,4 @@
-use crate::console::{console_read_byte, console_write, console_write_byte};
+use crate::console::{console_write, console_write_byte};
 use crate::shell_parser::{parse_command_line, ParsedArgs};
 use crate::vfs::{with_vfs, DirEntry, NodeType, OpenFlags, VfsError};
 
@@ -1269,12 +1269,147 @@ fn cmd_einfo() -> i32 {
 }
 
 // -----------------------------------------------------------------------------
-// Interactive Shell Loop
+// Command History & Interactive Shell Loop
 // -----------------------------------------------------------------------------
 
-/// Built-in interactive command-line shell running in userspace execution model.
+pub const HISTORY_CAPACITY: usize = 32;
+pub const MAX_CMD_LEN: usize = 128;
+
+/// Fixed-capacity command history ring buffer
+pub struct CommandHistory {
+    entries: [[u8; MAX_CMD_LEN]; HISTORY_CAPACITY],
+    lens: [usize; HISTORY_CAPACITY],
+    count: usize,
+    head: usize,
+    /// Browsing position: None when at live input, Some(idx) when viewing history
+    nav_index: Option<usize>,
+    /// Temporary stash of current unsent input
+    stash: [u8; MAX_CMD_LEN],
+    stash_len: usize,
+}
+
+impl CommandHistory {
+    pub const fn new() -> Self {
+        Self {
+            entries: [[0; MAX_CMD_LEN]; HISTORY_CAPACITY],
+            lens: [0; HISTORY_CAPACITY],
+            count: 0,
+            head: 0,
+            nav_index: None,
+            stash: [0; MAX_CMD_LEN],
+            stash_len: 0,
+        }
+    }
+
+    /// Add a command to history (skips empty and consecutive duplicate commands)
+    pub fn add(&mut self, cmd: &str) {
+        let bytes = cmd.as_bytes();
+        if bytes.is_empty() {
+            self.nav_index = None;
+            return;
+        }
+
+        // Check if identical to most recent entry
+        if self.count > 0 {
+            let last_idx = (self.head + self.count - 1) % HISTORY_CAPACITY;
+            if self.lens[last_idx] == bytes.len() && &self.entries[last_idx][..bytes.len()] == bytes {
+                self.nav_index = None;
+                return;
+            }
+        }
+
+        let insert_idx = if self.count < HISTORY_CAPACITY {
+            let idx = (self.head + self.count) % HISTORY_CAPACITY;
+            self.count += 1;
+            idx
+        } else {
+            let idx = self.head;
+            self.head = (self.head + 1) % HISTORY_CAPACITY;
+            idx
+        };
+
+        let copy_len = bytes.len().min(MAX_CMD_LEN);
+        self.entries[insert_idx][..copy_len].copy_from_slice(&bytes[..copy_len]);
+        self.lens[insert_idx] = copy_len;
+        self.nav_index = None;
+    }
+
+    /// Navigate up (older commands). Takes current unsubmitted input to stash if starting navigation.
+    pub fn navigate_up(&mut self, current_input: &str) -> Option<&str> {
+        if self.count == 0 {
+            return None;
+        }
+
+        match self.nav_index {
+            None => {
+                // Save current live input to stash
+                let bytes = current_input.as_bytes();
+                let copy_len = bytes.len().min(MAX_CMD_LEN);
+                self.stash[..copy_len].copy_from_slice(&bytes[..copy_len]);
+                self.stash_len = copy_len;
+
+                // Start from the most recent command
+                let idx = self.count - 1;
+                self.nav_index = Some(idx);
+                self.get_entry(idx)
+            }
+            Some(idx) => {
+                if idx > 0 {
+                    let next_idx = idx - 1;
+                    self.nav_index = Some(next_idx);
+                    self.get_entry(next_idx)
+                } else {
+                    // Already at oldest command
+                    self.get_entry(0)
+                }
+            }
+        }
+    }
+
+    /// Navigate down (newer commands). Returns None or stash when going past newest command.
+    pub fn navigate_down(&mut self) -> Option<&str> {
+        if self.count == 0 {
+            return None;
+        }
+
+        match self.nav_index {
+            None => None,
+            Some(idx) => {
+                if idx + 1 < self.count {
+                    let next_idx = idx + 1;
+                    self.nav_index = Some(next_idx);
+                    self.get_entry(next_idx)
+                } else {
+                    // Moving past the newest command restores stashed unsubmitted line
+                    self.nav_index = None;
+                    core::str::from_utf8(&self.stash[..self.stash_len]).ok()
+                }
+            }
+        }
+    }
+
+    /// Reset navigation position without losing history
+    pub fn reset_nav(&mut self) {
+        self.nav_index = None;
+    }
+
+    /// Number of items in history
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    fn get_entry(&self, relative_idx: usize) -> Option<&str> {
+        if relative_idx >= self.count {
+            None
+        } else {
+            let physical_idx = (self.head + relative_idx) % HISTORY_CAPACITY;
+            let len = self.lens[physical_idx];
+            core::str::from_utf8(&self.entries[physical_idx][..len]).ok()
+        }
+    }
+}
+
 pub fn run_interactive_shell() {
-    // Format dedicated terminal viewport on graphical framebuffer
     crate::console::init_terminal_viewport();
 
     console_write("\r\n");
@@ -1283,8 +1418,9 @@ pub fn run_interactive_shell() {
     console_write("====================================================\r\n");
     console_write("Type 'help' for command categories or 'eternal' for banner.\r\n\r\n");
 
-    let mut line_buf = [0u8; 128];
+    let mut line_buf = [0u8; MAX_CMD_LEN];
     let mut ctx = ShellContext::new();
+    let mut history = CommandHistory::new();
 
     loop {
         // Print prompt: "EternalOS [/]> "
@@ -1293,27 +1429,73 @@ pub fn run_interactive_shell() {
         console_write("]> ");
 
         let mut line_len = 0usize;
+        history.reset_nav();
 
         // Read line
         crate::console::draw_text_cursor(true);
         loop {
-            if let Some(b) = console_read_byte() {
+            if let Some(key) = crate::console::console_read_input() {
                 crate::console::draw_text_cursor(false);
-                if b == b'\r' || b == b'\n' {
-                    console_write("\r\n");
-                    break;
-                } else if b == 0x08 || b == 0x7F {
-                    // Backspace
-                    if line_len > 0 {
-                        line_len -= 1;
-                        console_write_byte(0x08);
+                match key {
+                    crate::console::ConsoleKey::Char(b) => {
+                        // Any typing brings terminal back to live bottom view if scrolled
+                        crate::console::terminal_return_to_live();
+
+                        if b == b'\r' || b == b'\n' {
+                            console_write("\r\n");
+                            break;
+                        } else if b == 0x08 || b == 0x7F {
+                            // Backspace
+                            if line_len > 0 {
+                                line_len -= 1;
+                                console_write_byte(0x08);
+                            }
+                        } else if b >= 0x20 && b <= 0x7E {
+                            if line_len < MAX_CMD_LEN - 1 {
+                                line_buf[line_len] = b;
+                                line_len += 1;
+                                console_write_byte(b);
+                            }
+                        }
                     }
-                } else if b >= 0x20 && b <= 0x7E {
-                    if line_len < 127 {
-                        line_buf[line_len] = b;
-                        line_len += 1;
-                        console_write_byte(b);
+                    crate::console::ConsoleKey::Up => {
+                        let cur_slice = core::str::from_utf8(&line_buf[..line_len]).unwrap_or("");
+                        if let Some(recalled) = history.navigate_up(cur_slice) {
+                            // Erase current line on screen
+                            while line_len > 0 {
+                                console_write_byte(0x08);
+                                line_len -= 1;
+                            }
+                            // Replace with recalled command
+                            let r_bytes = recalled.as_bytes();
+                            let copy_len = r_bytes.len().min(MAX_CMD_LEN - 1);
+                            line_buf[..copy_len].copy_from_slice(&r_bytes[..copy_len]);
+                            line_len = copy_len;
+                            console_write(recalled);
+                        }
                     }
+                    crate::console::ConsoleKey::Down => {
+                        if let Some(recalled) = history.navigate_down() {
+                            // Erase current line on screen
+                            while line_len > 0 {
+                                console_write_byte(0x08);
+                                line_len -= 1;
+                            }
+                            // Replace with recalled command or stashed input
+                            let r_bytes = recalled.as_bytes();
+                            let copy_len = r_bytes.len().min(MAX_CMD_LEN - 1);
+                            line_buf[..copy_len].copy_from_slice(&r_bytes[..copy_len]);
+                            line_len = copy_len;
+                            console_write(recalled);
+                        }
+                    }
+                    crate::console::ConsoleKey::PageUp => {
+                        crate::console::terminal_page_up();
+                    }
+                    crate::console::ConsoleKey::PageDown => {
+                        crate::console::terminal_page_down();
+                    }
+                    _ => {}
                 }
                 crate::console::draw_text_cursor(true);
             } else {
@@ -1330,6 +1512,9 @@ pub fn run_interactive_shell() {
         if input_str.is_empty() {
             continue;
         }
+
+        // Add submitted command to history
+        history.add(input_str);
 
         let status = execute_command(input_str, &mut ctx);
         if status == -1 {

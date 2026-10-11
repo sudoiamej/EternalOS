@@ -25,10 +25,16 @@ pub fn run_phase_shell_tests() {
     // 5. Test System and Hardware Diagnostic Commands (esys, emem, epci, echeck)
     test_system_commands(&mut ctx);
 
+    // 6. Test Terminal Scrollback Buffer
+    test_scrollback_buffer();
+
+    // 7. Test Command History Navigation & Stash
+    test_command_history();
+
     log_info!("====================================================");
     log_info!("  ALL COMMAND SUITE TESTS COMPLETED SUCCESSFULLY!   ");
     log_info!("====================================================");
-    println!(">>> SHELL TEST PASS: All CLI commands and parsers verified.");
+    println!(">>> SHELL TEST PASS: All CLI commands, scrollback, and history verified.");
 }
 
 fn test_argument_parsing() {
@@ -193,4 +199,112 @@ fn test_system_commands(ctx: &mut ShellContext) {
     assert_eq!(s_einfo, 0);
 
     log_info!("  [OK] System and diagnostics commands verified.");
+}
+
+fn test_scrollback_buffer() {
+    log_info!("[TEST 6/7] Testing Terminal Scrollback Buffer...");
+
+    use crate::console::ScrollbackBuffer;
+    let mut sb = ScrollbackBuffer::new();
+
+    // Push characters
+    for b in b"Hello Scrollback" {
+        sb.push_char(*b);
+    }
+    assert_eq!(sb.count, 1);
+    let line = sb.get_line_from_bottom(0).expect("Should have bottom line");
+    assert_eq!(&line.chars[..line.len], b"Hello Scrollback");
+
+    // Add multiple lines exceeding TERM_ROWS (24)
+    for i in 0..30 {
+        sb.newline();
+        sb.push_char(b'0' + (i % 10) as u8);
+    }
+    assert_eq!(sb.count, 31);
+
+    // Initial scroll offset is 0
+    assert_eq!(sb.scroll_offset, 0);
+    assert!(!sb.is_scrolled());
+
+    // Scroll up by 5 lines
+    sb.scroll_up(5);
+    assert_eq!(sb.scroll_offset, 5);
+    assert!(sb.is_scrolled());
+
+    // Scroll up beyond capacity (clamped to count - TERM_ROWS = 31 - 24 = 7)
+    sb.scroll_up(20);
+    assert_eq!(sb.scroll_offset, 7);
+
+    // Scroll down by 3 lines
+    sb.scroll_down(3);
+    assert_eq!(sb.scroll_offset, 4);
+
+    // Reset scroll back to live bottom view
+    sb.reset_scroll();
+    assert_eq!(sb.scroll_offset, 0);
+    assert!(!sb.is_scrolled());
+
+    log_info!("  [OK] Terminal scrollback buffer ring and scrolling clamp verified.");
+}
+
+fn test_command_history() {
+    log_info!("[TEST 7/7] Testing Interactive Command History & Navigation...");
+
+    use crate::shell::CommandHistory;
+    let mut hist = CommandHistory::new();
+
+    assert_eq!(hist.count(), 0);
+    assert_eq!(hist.navigate_up(""), None);
+    assert_eq!(hist.navigate_down(), None);
+
+    // Empty strings are ignored
+    hist.add("");
+    assert_eq!(hist.count(), 0);
+
+    // Add first command
+    hist.add("ls");
+    assert_eq!(hist.count(), 1);
+
+    // Consecutive duplicate is ignored
+    hist.add("ls");
+    assert_eq!(hist.count(), 1);
+
+    // Add more commands
+    hist.add("cd /");
+    hist.add("cat file.txt");
+    assert_eq!(hist.count(), 3);
+
+    // Navigate Up from empty input: recalls "cat file.txt"
+    let c1 = hist.navigate_up("unsubmitted typing");
+    assert_eq!(c1, Some("cat file.txt"));
+
+    // Navigate Up again: recalls "cd /"
+    let c2 = hist.navigate_up("cat file.txt");
+    assert_eq!(c2, Some("cd /"));
+
+    // Navigate Up again: recalls "ls"
+    let c3 = hist.navigate_up("cd /");
+    assert_eq!(c3, Some("ls"));
+
+    // Navigate Up at oldest: stays at "ls"
+    let c4 = hist.navigate_up("ls");
+    assert_eq!(c4, Some("ls"));
+
+    // Navigate Down: recalls "cd /"
+    let d1 = hist.navigate_down();
+    assert_eq!(d1, Some("cd /"));
+
+    // Navigate Down: recalls "cat file.txt"
+    let d2 = hist.navigate_down();
+    assert_eq!(d2, Some("cat file.txt"));
+
+    // Navigate Down past newest: restores unsubmitted typing!
+    let d3 = hist.navigate_down();
+    assert_eq!(d3, Some("unsubmitted typing"));
+
+    // Navigate Down again: None
+    let d4 = hist.navigate_down();
+    assert_eq!(d4, None);
+
+    log_info!("  [OK] Command history ring, deduplication, and stash restore verified.");
 }
