@@ -8,7 +8,10 @@ use limine::request::{FramebufferRequest, RequestsEndMarker, RequestsStartMarker
 
 pub mod idt;
 pub mod mm;
+#[cfg(feature = "test-memory")]
+pub mod mm_tests;
 pub mod serial;
+pub mod vm;
 
 /// Set Limine base revision
 #[used]
@@ -33,11 +36,11 @@ unsafe extern "C" fn kmain() -> ! {
 
     println!();
     println!("====================================================");
-    println!("       [Project EternalOS] - Phase 2 Kernel         ");
+    println!("       [Project EternalOS] - Phase 3 Kernel         ");
     println!("====================================================");
     log_info!("Architecture : x86-64 (AMD64 / Intel 64)");
     log_info!("Boot Protocol: Limine (Revision: Base)");
-    log_info!("Kernel Subsys: Diagnostics, IDT & Memory-Map");
+    log_info!("Kernel Subsys: Diagnostics, IDT, PMM & VM Foundations");
 
     if BASE_REVISION.is_supported() {
         log_info!("Limine Base Revision handshake: Supported");
@@ -74,7 +77,18 @@ unsafe extern "C" fn kmain() -> ! {
     // 3. Inspect Physical Memory Map
     mm::parse_memory_map();
 
-    // 4. Test Hooks (Isolated & Explicitly compiled via test targets/features)
+    // 4. Initialize Bitmap Physical Page-Frame Allocator
+    mm::init_frame_allocator();
+
+    // 5. Inspect Active Virtual Memory / Paging Mode
+    vm::inspect_paging_environment();
+
+    // 6. Test Hooks
+    #[cfg(feature = "test-memory")]
+    {
+        mm_tests::run_phase3_memory_tests();
+    }
+
     #[cfg(feature = "test-div-zero")]
     {
         log_warn!(">>> TRIGGERING TEST: Divide-By-Zero Exception (#DE)...");
