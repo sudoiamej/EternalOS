@@ -1,20 +1,22 @@
 use crate::serial::SerialPort;
-use crate::framebuffer::{with_framebuffer, Color};
+use crate::framebuffer::{with_framebuffer, Color, Rect};
 use crate::sync::SpinLock;
 
 /// Text console state tracking cursor row and column for framebuffer rendering.
 pub struct ConsoleState {
-    cursor_x: usize,
-    cursor_y: usize,
-    max_cols: usize,
-    max_rows: usize,
+    pub cursor_x: usize,
+    pub cursor_y: usize,
+    pub min_y: usize,
+    pub max_cols: usize,
+    pub max_rows: usize,
 }
 
 impl ConsoleState {
     pub const fn new() -> Self {
         Self {
-            cursor_x: 0,
-            cursor_y: 0,
+            cursor_x: 24,
+            cursor_y: 60,
+            min_y: 60,
             max_cols: 160,
             max_rows: 50,
         }
@@ -22,6 +24,22 @@ impl ConsoleState {
 }
 
 static CONSOLE: SpinLock<ConsoleState> = SpinLock::new(ConsoleState::new());
+
+/// Clear console display on framebuffer and serial terminal
+pub fn console_clear() {
+    // 1. ANSI clear sequence for serial terminal
+    console_write("\x1B[2J\x1B[H");
+
+    // 2. Clear framebuffer workspace area below top header bar (y >= 50)
+    with_framebuffer(|fb| {
+        let mut con = CONSOLE.lock();
+        let clear_rect = Rect::new(0, 50, fb.width, fb.height.saturating_sub(82));
+        fb.fill_rect(clear_rect, Color::DARK_BG);
+        con.cursor_x = 24;
+        con.cursor_y = 60;
+        con.min_y = 60;
+    });
+}
 
 /// Write byte to console (echoes to COM1 and renders to Framebuffer if available)
 pub fn console_write_byte(b: u8) {
@@ -34,22 +52,19 @@ pub fn console_write_byte(b: u8) {
     // 2. Output to framebuffer
     with_framebuffer(|fb| {
         let mut con = CONSOLE.lock();
-        if con.cursor_y == 0 && con.cursor_x == 0 {
-            // Initialize bottom console area if screen is wide enough
-            con.max_cols = fb.width / 8;
-            con.max_rows = fb.height / 16;
-            // Let's place console starting at y = 260 if height >= 480
-            if fb.height >= 480 {
-                con.cursor_y = 260;
-                con.cursor_x = 24;
-            }
+        if con.cursor_y < con.min_y {
+            con.cursor_y = con.min_y;
+            con.cursor_x = 24;
         }
 
         if b == b'\n' {
             con.cursor_x = 24;
             con.cursor_y += 16;
-            if con.cursor_y + 16 > fb.height {
-                con.cursor_y = if fb.height >= 480 { 260 } else { 0 };
+            if con.cursor_y + 20 > fb.height.saturating_sub(32) {
+                // Scroll or wrap back to top of workspace area
+                let clear_rect = Rect::new(0, 50, fb.width, fb.height.saturating_sub(82));
+                fb.fill_rect(clear_rect, Color::DARK_BG);
+                con.cursor_y = con.min_y;
             }
         } else if b == b'\r' {
             con.cursor_x = 24;
@@ -65,8 +80,10 @@ pub fn console_write_byte(b: u8) {
             if con.cursor_x + 8 > fb.width - 24 {
                 con.cursor_x = 24;
                 con.cursor_y += 16;
-                if con.cursor_y + 16 > fb.height {
-                    con.cursor_y = if fb.height >= 480 { 260 } else { 0 };
+                if con.cursor_y + 20 > fb.height.saturating_sub(32) {
+                    let clear_rect = Rect::new(0, 50, fb.width, fb.height.saturating_sub(82));
+                    fb.fill_rect(clear_rect, Color::DARK_BG);
+                    con.cursor_y = con.min_y;
                 }
             }
         }
@@ -84,3 +101,4 @@ pub fn console_write(s: &str) {
 pub fn console_read_byte() -> Option<u8> {
     SerialPort::read_byte()
 }
+

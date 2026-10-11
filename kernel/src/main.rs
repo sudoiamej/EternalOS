@@ -281,9 +281,40 @@ unsafe extern "C" fn kmain() -> ! {
         panic!("Intentional test panic triggered via test-panic flag");
     }
 
-    log_info!("Kernel startup sequence complete. Entering safe CPU halt state.");
+    log_info!("Kernel startup sequence complete.");
     println!("====================================================");
 
+    // 15. Transition from boot diagnostics to interactive shell
+    #[cfg(not(any(
+        feature = "test-userspace",
+        feature = "test-eternalfs",
+        feature = "test-vfs",
+        feature = "test-partitions",
+        feature = "test-storage",
+        feature = "test-graphics",
+        feature = "test-pci",
+        feature = "test-sleep",
+        feature = "test-sync",
+        feature = "test-preempt",
+        feature = "test-task",
+        feature = "test-heap",
+        feature = "test-memory",
+        feature = "test-reliability",
+        feature = "test-vmem",
+        feature = "test-arch",
+        feature = "test-vmem-fault",
+        feature = "test-div-zero",
+        feature = "test-invalid-opcode",
+        feature = "test-gpf",
+        feature = "test-pagefault",
+        feature = "test-panic"
+    )))]
+    {
+        log_info!("Starting EternalOS Interactive Shell...");
+        shell::run_interactive_shell();
+    }
+
+    log_info!("Session finished. Entering safe CPU halt state.");
     hcf();
 }
 

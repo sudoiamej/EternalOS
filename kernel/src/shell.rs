@@ -15,11 +15,10 @@ pub fn run_interactive_shell() {
     let mut dir_len = 1usize;
 
     loop {
-        // Print prompt
         let cwd_str = core::str::from_utf8(&current_dir[..dir_len]).unwrap_or("/");
-        console_write("eternalos:");
-        console_write(cwd_str);
-        console_write("$ ");
+
+        // Print prompt
+        console_write("EternalOS> ");
 
         let mut line_len = 0usize;
 
@@ -78,10 +77,7 @@ pub fn run_interactive_shell() {
             }
 
             "clear" => {
-                crate::framebuffer::with_framebuffer(|fb| {
-                    fb.clear(crate::framebuffer::Color::DARK_BG);
-                });
-                console_write("\x1B[2J\x1B[H"); // ANSI clear screen escape sequence for UART terminal
+                crate::console::console_clear();
             }
 
             "echo" => {
