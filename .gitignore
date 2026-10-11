@@ -1,0 +1,7 @@
+/target/
+/kernel/target/
+*.iso
+*.hdd
+*.img
+.DS_Store
+Thumbs.db
