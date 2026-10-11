@@ -3,6 +3,9 @@ use crate::vfs::{with_vfs, DirEntry, NodeType, OpenFlags};
 
 /// Built-in interactive command-line shell running in userspace execution model.
 pub fn run_interactive_shell() {
+    // Format dedicated terminal viewport on graphical framebuffer
+    crate::console::init_terminal_viewport();
+
     console_write("\r\n");
     console_write("====================================================\r\n");
     console_write("        EternalOS Interactive Shell (Phase 15)      \r\n");
