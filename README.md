@@ -59,6 +59,24 @@ EternalOS/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
 
+## 🎨 Framebuffer & Early Graphics Subsystem (Phase 13A)
+
+### 1. Architecture & Capabilities
+- **Modular Framebuffer Abstraction:** `Framebuffer` encapsulation representing the active linear framebuffer supplied by Limine (`1280x800 @ 32 bpp`, pitch `5120` bytes, BGRX/RGBX pixel formats).
+- **Physical Memory Resolution:** Resolved physical framebuffer base address (`0x0000000080001000`) via kernel PML4 virtual-to-physical address translation.
+- **2D Rendering Primitives:** Zero-allocation, bounds-checked rendering engine:
+  - `clear(color)`: Fast 32-bit row-stride clearing.
+  - `put_pixel(x, y, color)`: Individual pixel plotting with pitch and clipping calculation.
+  - `fill_rect(rect, color)` / `draw_rect_border(rect, color, thickness)`: Bounded rectangle fill and outline operations.
+  - `draw_hline(x, y, length, color)` / `draw_vline(x, y, length, color)`: Fast horizontal and vertical stroke lines.
+  - `draw_char(x, y, char, fg, bg)` / `draw_text(x, y, text, fg, bg)`: Monospaced 8x16 font rendering with automatic ASCII conversion and clipping.
+  - `draw_monochrome_bitmap(x, y, width, height, data, fg, bg)`: 1-bit per pixel monochrome bitmap renderer.
+- **Embedded Visual Assets:**
+  - `font.rs`: Embedded 8x16 monospaced ASCII bitmap font covering standard printable ASCII range (`0x20..=0x7E`) with fallback glyph for unmapped code points.
+  - `logo_asset.rs`: 64x58 1-bit monochrome EternalOS emblem generated from `assets/logo.png`.
+- **Graphical Boot Screen:** Modern dark-mode dashboard featuring top navigation bar, central branding card with logo and wordmark, diagnostics status grid (Memory, CPU, Paging, PCI), and a live status footer.
+- **Deterministic Test Suite (`test-graphics`):** 12 comprehensive unit tests validating address calculation, stride padding, color packing, clipping boundaries, integer overflow safeguards, font glyph lookup, and logo geometry.
+
 ---
 
 ## 🔌 PCI/PCIe Enumeration & Hardware Discovery (Phase 12)

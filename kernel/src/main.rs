@@ -4,7 +4,7 @@
 
 use core::arch::asm;
 use limine::BaseRevision;
-use limine::request::{FramebufferRequest, RequestsEndMarker, RequestsStartMarker};
+use limine::request::{RequestsEndMarker, RequestsStartMarker};
 
 pub mod cpu;
 pub mod gdt;
@@ -32,20 +32,20 @@ pub mod reliability_tests;
 pub mod vmem_tests;
 #[cfg(feature = "test-arch")]
 pub mod arch_tests;
+pub mod font;
+pub mod framebuffer;
+#[cfg(feature = "test-graphics")]
+pub mod graphics_tests;
+pub mod logo_asset;
 pub mod pci;
 #[cfg(feature = "test-pci")]
 pub mod pci_tests;
 pub mod timer;
 pub mod vm;
 
-/// Set Limine base revision
 #[used]
 #[unsafe(link_section = ".requests")]
 static BASE_REVISION: BaseRevision = BaseRevision::new();
-
-#[used]
-#[unsafe(link_section = ".requests")]
-static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 
 #[used]
 #[unsafe(link_section = ".requests_start_marker")]
@@ -82,29 +82,6 @@ unsafe extern "C" fn kmain() -> ! {
     // 3. Initialize CPU Exceptions and Timer IRQ in IDT (binds IST1 to #DF)
     idt::init();
 
-    // 2. Initialize Framebuffer Output if available
-    if let Some(framebuffer_response) = FRAMEBUFFER_REQUEST.get_response() {
-        log_info!("Framebuffer detected. Initializing visual status block...");
-        if let Some(fb) = framebuffer_response.framebuffers().next() {
-            let width = fb.width().min(320);
-            let height = fb.height().min(80);
-            for y in 0..height {
-                for x in 0..width {
-                    let pixel_offset = (y * fb.pitch()) + (x * 4);
-                    unsafe {
-                        fb.addr()
-                            .add(pixel_offset as usize)
-                            .cast::<u32>()
-                            .write(0x001B4D3E); // Deep teal/blue
-                    }
-                }
-            }
-            log_info!("Display frame buffer initialized successfully.");
-        }
-    } else {
-        log_warn!("No graphics framebuffer provided by bootloader.");
-    }
-
     // 3. Inspect Physical Memory Map
     mm::parse_memory_map();
 
@@ -119,22 +96,29 @@ unsafe extern "C" fn kmain() -> ! {
         log_error!("Failed to initialize Kernel Heap: {}", e);
     }
 
-    // 7. Initialize Kernel Tasking Subsystem
+    // 7. Initialize Framebuffer & Render Graphical Boot Screen
+    framebuffer::init();
+
+    // 8. Initialize Kernel Tasking Subsystem
     task::init_tasking();
 
-    // 8. Discover PCI/PCIe Hardware & Enumerate Buses (Mechanism #1)
+    // 9. Discover PCI/PCIe Hardware & Enumerate Buses (Mechanism #1)
     pci::init();
 
-    // 9. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
+    // 10. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
     timer::init_pit(100);
 
-    // 10. Enable CPU Interrupts
+    // 11. Enable CPU Interrupts
     unsafe {
         asm!("sti", options(nomem, nostack, preserves_flags));
     }
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
-    // 11. Test Hooks
+    // 12. Test Hooks
+    #[cfg(feature = "test-graphics")]
+    {
+        graphics_tests::run_phase13a_graphics_tests();
+    }
     #[cfg(feature = "test-pci")]
     {
         pci_tests::run_phase12_pci_tests();
