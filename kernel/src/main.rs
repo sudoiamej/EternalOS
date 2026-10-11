@@ -14,6 +14,9 @@ pub mod mm;
 #[cfg(feature = "test-memory")]
 pub mod mm_tests;
 pub mod serial;
+pub mod task;
+#[cfg(feature = "test-task")]
+pub mod task_tests;
 pub mod vm;
 
 /// Set Limine base revision
@@ -39,11 +42,11 @@ unsafe extern "C" fn kmain() -> ! {
 
     println!();
     println!("====================================================");
-    println!("       [Project EternalOS] - Phase 4 Kernel         ");
+    println!("       [Project EternalOS] - Phase 5 Kernel         ");
     println!("====================================================");
     log_info!("Architecture : x86-64 (AMD64 / Intel 64)");
     log_info!("Boot Protocol: Limine (Revision: Base)");
-    log_info!("Kernel Subsys: IDT, PMM, Paging & Kernel Heap");
+    log_info!("Kernel Subsys: IDT, PMM, Paging, Heap & Tasking");
 
     if BASE_REVISION.is_supported() {
         log_info!("Limine Base Revision handshake: Supported");
@@ -91,7 +94,15 @@ unsafe extern "C" fn kmain() -> ! {
         log_error!("Failed to initialize Kernel Heap: {}", e);
     }
 
-    // 7. Test Hooks
+    // 7. Initialize Kernel Tasking & Cooperative Scheduler
+    task::init_tasking();
+
+    // 8. Test Hooks
+    #[cfg(feature = "test-task")]
+    {
+        task_tests::run_phase5_scheduler_tests();
+    }
+
     #[cfg(feature = "test-heap")]
     {
         heap_tests::run_phase4_heap_tests();

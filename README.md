@@ -40,38 +40,32 @@ EternalOS/
 │       ├── mm_tests.rs     # Phase 3 physical memory management test suite
 │       ├── vm.rs           # Virtual memory foundations, 4-level page table walking, mapping & TLB invalidation
 │       ├── heap.rs         # Kernel heap allocator (`GlobalAlloc`), free-list management, and page table backing
-│       └── heap_tests.rs   # Phase 4 dynamic allocation test suite
+│       ├── heap_tests.rs   # Phase 4 dynamic allocation test suite
+│       ├── task.rs         # Kernel task abstraction, cooperative round-robin scheduler, and x86-64 context switch
+│       └── task_tests.rs   # Phase 5 cooperative multitasking test suite
 └── tools/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
 
 ---
 
-## 🧠 Memory Management Architecture
+## ⚙️ Kernel Tasking & Cooperative Scheduler (Phase 5)
 
-### 1. Physical Page-Frame Allocator (PMM)
-- **Design:** Statically allocated Bitmap Frame Allocator tracking up to 4 GiB of physical memory (`MAX_PHYSICAL_MEM`).
-- **Memory Overhead:** 131,072 bytes (128 KiB) of bitmap overhead for 1,048,576 4 KiB frames (~0.003% total overhead).
-- **Protected Regions:** Low 1 MiB (`0x0`–`0x100000`) hardware region and non-usable Limine regions (`RESERVED`, `ACPI_*`, `BOOTLOADER_RECLAIMABLE`, `FRAMEBUFFER`).
-- **Safety Invariants:** Checked alignment, double-free detection, and checked arithmetic.
+### 1. Task Abstraction & Stack Management
+- **Task Structure (`Task`):** Holds unique `id`, human-readable `name`, `TaskState` (`Ready`, `Running`, `Terminated`), saved `Context`, and bounds `stack_bottom` / `stack_top`.
+- **Dedicated Stacks:** Each task is allocated 16 KiB (4 aligned 4 KiB pages) backed by physical frames from the PMM and mapped with `WRITABLE | NO_EXECUTE` permissions in dedicated virtual memory space (`0xffff_a000_0000_0000`). Each stack is separated by unmapped guard pages.
+- **Initial Alignment:** Enforces standard x86-64 System V 16-byte stack alignment.
 
-### 2. Virtual Memory Subsystem (VM)
-- **Paging Mode:** 4-Level x86-64 Paging active (`PML4 -> PDPT -> PD -> PT`).
-- **Safe Mapping:** `map_page(vaddr, pframe, flags)` walks the active PML4 (retrieved from `CR3` and translated via Limine HHDM), allocates intermediate page tables dynamically from the PMM, sets entry flags (`PRESENT | WRITABLE | NO_EXECUTE`), and executes `invlpg`.
+### 2. Context Switching
+- **ABI Boundary:** Preserves callee-saved registers (`r15`, `r14`, `r13`, `r12`, `rbx`, `rbp`, `rsp`) and instruction pointer (`rip`).
+- **Naked Assembly:** Implemented via `#[unsafe(naked)]` function `x86_64_switch_context(prev, next)` without compiler prologue/epilogue interference.
+- **Bootstrap & Trampoline:** Tasks bootstrap through `task_entry_trampoline`. When a task function returns, the trampoline cleanly invokes `terminate_task()`.
+- **FPU/SIMD State Policy:** The current execution model does not save/restore SSE/AVX state across cooperative yields; kernel tasks must not execute floating-point/vector instructions across yield points.
 
-### 3. Dynamic Kernel Heap (Phase 4)
-- **Virtual Base:** Dedicated kernel heap space at `0xffff_9000_0000_0000`.
-- **Initial Size:** 128 KiB (32 4 KiB pages), scalable up to 16 MiB.
-- **Backing Mechanism:** Every virtual heap page is backed by physical frames allocated from the PMM and mapped with `WRITABLE | NO_EXECUTE` permissions before heap initialization.
-- **Allocator Design:** Free-list allocator implementing `core::alloc::GlobalAlloc`.
-- **Alignment & Splitting:**
-  - Guarantees 8-byte minimum allocation and header alignment.
-  - Supports custom alignments (16, 64, 128, etc.).
-  - Free block headers are maintained in-band with boundary preservation.
-- **Safety & Error Handling:**
-  - OOB deallocation rejection.
-  - Heap exhaustion deterministic failure (`Err("Kernel heap exhausted")` or returning null pointer).
-  - Protected via re-entrancy safe `LockedHeap` spinlock.
+### 3. Cooperative Scheduler Policy
+- **Algorithm:** Deterministic Round-Robin over an internal task table (`MAX_TASKS = 16`).
+- **State Flow:** `Ready -> Running -> (yield_now) -> Ready -> (return) -> Terminated`. Terminated tasks are marked and skipped in future scheduling rounds.
+- **Synchronization:** Mutex protection with spinlock handoff (`SCHEDULER_LOCK` released prior to switching execution and re-acquired upon resumption).
 
 ---
 
@@ -82,12 +76,13 @@ EternalOS/
 .\run.ps1 -Headless
 ```
 
-### 2. Run Phase 4 Kernel Heap Tests
+### 2. Run Phase 5 Cooperative Scheduler Tests
 ```powershell
-.\run.ps1 -Headless -Feature test-heap
+.\run.ps1 -Headless -Feature test-task
 ```
 
-### 3. Run Phase 3 Physical Memory Tests
+### 3. Run Prior Phase Tests (Regression Verification)
 ```powershell
+.\run.ps1 -Headless -Feature test-heap
 .\run.ps1 -Headless -Feature test-memory
 ```

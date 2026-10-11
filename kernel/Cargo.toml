@@ -10,6 +10,7 @@ test-invalid-opcode = []
 test-panic = []
 test-memory = []
 test-heap = []
+test-task = []
 
 [dependencies]
 limine = "0.5"
