@@ -47,6 +47,9 @@ pub mod storage_tests;
 pub mod partition;
 #[cfg(feature = "test-partitions")]
 pub mod partition_tests;
+pub mod vfs;
+#[cfg(feature = "test-vfs")]
+pub mod vfs_tests;
 pub mod timer;
 pub mod vm;
 
@@ -115,16 +118,23 @@ unsafe extern "C" fn kmain() -> ! {
     // 10. Initialize Block Storage (VirtIO Block Driver)
     virtio_blk::init();
 
-    // 11. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
+    // 11. Initialize Virtual Filesystem (VFS) with root RamFs
+    vfs::init();
+
+    // 12. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
     timer::init_pit(100);
 
-    // 12. Enable CPU Interrupts
+    // 13. Enable CPU Interrupts
     unsafe {
         asm!("sti", options(nomem, nostack, preserves_flags));
     }
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
-    // 13. Test Hooks
+    // 14. Test Hooks
+    #[cfg(feature = "test-vfs")]
+    {
+        vfs_tests::run_phase14b_vfs_tests();
+    }
     #[cfg(feature = "test-partitions")]
     {
         partition_tests::run_phase14a_partition_tests();

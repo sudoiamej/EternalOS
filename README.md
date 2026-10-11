@@ -59,6 +59,36 @@ EternalOS/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
 
+## 📁 Virtual Filesystem (VFS) Layer & RamFs (Phase 14B)
+
+### 1. Architecture & Capabilities
+- **Hardware-Independent VFS Architecture (`vfs/mod.rs`):**
+  - Abstract filesystem interface (`FileSystem` trait): `root_inode`, `lookup`, `get_metadata`, `create_file`, `create_dir`, `read`, `write`, `truncate`, and `readdir`.
+  - Node & Metadata model: `InodeId` (64-bit identifier), `NodeType` (`RegularFile`, `Directory`), `Metadata` (size, type, permissions), and `DirEntry`.
+  - Unified error handling (`VfsError`): `NotFound`, `AlreadyExists`, `NotADirectory`, `IsADirectory`, `InvalidArgument`, `DirectoryNotEmpty`, `PermissionDenied`, `TableOverflow`, `NoSpace`, `InvalidPath`, `InvalidHandle`, and `ArithmeticOverflow`.
+- **Path Normalization & Canonicalization (`vfs/path.rs`):**
+  - Dedicated normalization algorithm (`normalize_path`) and component iterator (`PathComponentIterator`).
+  - Resolves `.` (current directory), collapses `..` (parent directory, clamped at `/`), collapses multiple consecutive slashes (`///`), and strips trailing slashes.
+  - Rejects relative paths, oversized path components (`MAX_NAME_LEN = 64`), and paths exceeding buffer limits (`MAX_PATH_LEN = 256`).
+- **In-Memory Filesystem Backend (`vfs/ramfs.rs`):**
+  - Volatile RamFs implementing the `FileSystem` trait.
+  - Statically bounded memory model: 32 nodes (`RAMFS_MAX_NODES`), 16 children per directory (`RAMFS_MAX_CHILDREN`), and 512-byte payload capacity per file (`RAMFS_FILE_MAX_SIZE`), completely isolated from hardware storage.
+  - Supports file creation, directory creation, hierarchical traversal, bounded read/write with auto-expansion, and file truncation.
+- **Global VFS Router & Mount Table (`vfs/router.rs`):**
+  - Mount point registry supporting root mounting at `/`.
+  - Global `SpinLock<VfsRouter>` with safe handle lifecycle tracking:
+    - Bounded file table (up to 32 open files).
+    - Monotonically incrementing generation counters (`FileHandle { fd, generation }`) to detect and reject stale file handles.
+    - Automatic sequential offset tracking and EOF semantics.
+- **Deterministic Test Suite (`test-vfs`):**
+  - Test 1: Path normalization, canonicalization, repeated slashes, `.`/`..` resolution, and boundary guards.
+  - Test 2: Isolated RamFs file/directory creation, duplicate rejection, payload read/write, truncation, and readdir enumeration.
+  - Test 3: High-level VFS lifecycle: file creation, write, stat, sequential read, and EOF.
+  - Test 4: Nested directory hierarchies, relative navigation across subdirectories, and non-directory traversal rejection.
+  - Test 5: File handle security: closed handle rejection, stale generation detection, and active mount point verification.
+
+---
+
 ## 🗂️ Read-Only GPT & MBR Partition Table Parsing (Phase 14A)
 
 ### 1. Architecture & Capabilities
