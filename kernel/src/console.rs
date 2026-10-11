@@ -446,11 +446,16 @@ pub fn console_read_byte() -> Option<u8> {
     }
 }
 
-/// Unified console input reading: checks keyboard events first, then polled PS/2, then UART COM1
+/// Unified console input reading: checks keyboard events first, then UART COM1
 pub fn console_read_input() -> Option<ConsoleKey> {
     // 1. Check structured input event queue from PS/2 keyboard IRQ1
     while let Some(ev) = poll_event() {
         if let InputEvent::KeyDown { key, ascii, .. } = ev {
+            // If this event has an ASCII character, discard the corresponding mirrored character in CHAR_QUEUE
+            if ascii.is_some() {
+                let _ = pop_char();
+            }
+
             match key {
                 KeyCode::UpArrow => return Some(ConsoleKey::Up),
                 KeyCode::DownArrow => return Some(ConsoleKey::Down),
@@ -469,20 +474,12 @@ pub fn console_read_input() -> Option<ConsoleKey> {
         }
     }
 
-    // 2. Check buffered characters (from push_char)
+    // 2. Check buffered characters (for any legacy pushes not via InputEvent)
     if let Some(b) = pop_char() {
         return Some(ConsoleKey::Char(b));
     }
 
-    // 3. Poll PS/2 controller directly if data is pending
-    if unsafe { crate::keyboard::has_data() } {
-        crate::keyboard::poll_data();
-        if let Some(b) = pop_char() {
-            return Some(ConsoleKey::Char(b));
-        }
-    }
-
-    // 4. Check Serial Port COM1 (supports ANSI escape sequences)
+    // 3. Check Serial Port COM1 (supports ANSI escape sequences)
     if let Some(b) = SerialPort::read_byte() {
         if b == 0x1B {
             // Check for ANSI escape sequences: \x1b[A, \x1b[B, \x1b[5~, etc.
