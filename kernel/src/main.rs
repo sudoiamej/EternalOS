@@ -63,6 +63,11 @@ pub mod shell;
 pub mod user_test_elf;
 #[cfg(feature = "test-userspace")]
 pub mod userspace_tests;
+pub mod input;
+pub mod keyboard;
+pub mod mouse;
+#[cfg(feature = "test-input")]
+pub mod input_tests;
 
 #[used]
 #[unsafe(link_section = ".requests")]
@@ -135,13 +140,21 @@ unsafe extern "C" fn kmain() -> ! {
     // 12. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
     timer::init_pit(100);
 
-    // 13. Enable CPU Interrupts
+    // 13. Initialize PS/2 Keyboard & Mouse Input Subsystems
+    keyboard::init();
+    mouse::init();
+
+    // 14. Enable CPU Interrupts
     unsafe {
         asm!("sti", options(nomem, nostack, preserves_flags));
     }
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
-    // 14. Test Hooks
+    // 15. Test Hooks
+    #[cfg(feature = "test-input")]
+    {
+        input_tests::run_input_tests();
+    }
     #[cfg(feature = "test-userspace")]
     {
         userspace_tests::run_phase15_userspace_tests();
@@ -307,7 +320,8 @@ unsafe extern "C" fn kmain() -> ! {
         feature = "test-invalid-opcode",
         feature = "test-gpf",
         feature = "test-pagefault",
-        feature = "test-panic"
+        feature = "test-panic",
+        feature = "test-input"
     )))]
     {
         log_info!("Starting EternalOS Interactive Shell...");

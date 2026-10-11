@@ -71,7 +71,7 @@ pub fn remap_pic() {
         outb(PIC2_DATA, ICW4_8086);
         io_wait();
 
-        // Unmask IRQ0 (timer) on Master PIC (0xFE), mask all other IRQs (slave PIC = 0xFF)
+        // Initially unmask IRQ0 (timer) on Master PIC (0xFE), mask all other IRQs (slave PIC = 0xFF)
         outb(PIC1_DATA, 0xFE);
         outb(PIC2_DATA, 0xFF);
     }
@@ -80,6 +80,31 @@ pub fn remap_pic() {
 pub fn send_eoi() {
     unsafe {
         outb(PIC1_COMMAND, PIC_EOI);
+    }
+}
+
+pub fn send_eoi_irq(irq: u8) {
+    unsafe {
+        if irq >= 8 {
+            outb(PIC2_COMMAND, PIC_EOI);
+        }
+        outb(PIC1_COMMAND, PIC_EOI);
+    }
+}
+
+pub fn unmask_irq(irq: u8) {
+    unsafe {
+        if irq < 8 {
+            let cur = inb(PIC1_DATA);
+            outb(PIC1_DATA, cur & !(1 << irq));
+        } else {
+            // Also unmask cascade IRQ2 on Master PIC
+            let cur_master = inb(PIC1_DATA);
+            outb(PIC1_DATA, cur_master & !(1 << 2));
+
+            let cur_slave = inb(PIC2_DATA);
+            outb(PIC2_DATA, cur_slave & !(1 << (irq - 8)));
+        }
     }
 }
 

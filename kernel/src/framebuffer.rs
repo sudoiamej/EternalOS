@@ -177,6 +177,31 @@ impl Framebuffer {
         }
     }
 
+    /// Read a single pixel at (x, y) with boundary clipping and volatile read
+    pub fn get_pixel(&self, x: usize, y: usize) -> Option<Color> {
+        let offset = self.offset_of(x, y)?;
+        unsafe {
+            let ptr = self.virt_base.add(offset);
+            if self.bpp == 32 {
+                let val = core::ptr::read_volatile(ptr.cast::<u32>());
+                let r = ((val >> self.format.red_mask_shift) & 0xFF) as u8;
+                let g = ((val >> self.format.green_mask_shift) & 0xFF) as u8;
+                let b = ((val >> self.format.blue_mask_shift) & 0xFF) as u8;
+                Some(Color::new(r, g, b))
+            } else if self.bpp == 24 {
+                let r_idx = (self.format.red_mask_shift / 8) as usize;
+                let g_idx = (self.format.green_mask_shift / 8) as usize;
+                let b_idx = (self.format.blue_mask_shift / 8) as usize;
+                let r = core::ptr::read_volatile(ptr.add(r_idx));
+                let g = core::ptr::read_volatile(ptr.add(g_idx));
+                let b = core::ptr::read_volatile(ptr.add(b_idx));
+                Some(Color::new(r, g, b))
+            } else {
+                None
+            }
+        }
+    }
+
     /// Fill the entire screen with a solid color
     pub fn clear(&self, color: Color) {
         self.fill_rect(Rect::new(0, 0, self.width, self.height), color);

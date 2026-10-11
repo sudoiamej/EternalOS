@@ -27,6 +27,7 @@ test-partitions = []
 test-vfs = []
 test-eternalfs = []
 test-userspace = []
+test-input = []
 
 [dependencies]
 limine = "0.5"

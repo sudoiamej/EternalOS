@@ -233,6 +233,16 @@ pub extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptSta
     }
 }
 
+/// Keyboard Interrupt Handler (IRQ1 -> Vector 33)
+pub extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    crate::keyboard::handle_interrupt();
+}
+
+/// Mouse Interrupt Handler (IRQ12 -> Vector 44)
+pub extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    crate::mouse::handle_interrupt();
+}
+
 pub fn init() {
     unsafe {
         IDT.entries[0].set_handler(divide_by_zero_handler as *const () as usize);
@@ -243,6 +253,8 @@ pub fn init() {
         IDT.entries[13].set_handler(general_protection_handler as *const () as usize);
         IDT.entries[14].set_handler(page_fault_handler as *const () as usize);
         IDT.entries[32].set_handler(timer_interrupt_handler as *const () as usize);
+        IDT.entries[33].set_handler(keyboard_interrupt_handler as *const () as usize);
+        IDT.entries[44].set_handler(mouse_interrupt_handler as *const () as usize);
         IDT.entries[0x80].set_handler_dpl(crate::syscall_handler::syscall_entry_stub as *const () as usize, 3);
 
         let idt_ptr = IdtPointer {
@@ -253,7 +265,7 @@ pub fn init() {
         asm!("lidt [{}]", in(reg) &idt_ptr, options(readonly, nostack, preserves_flags));
     }
 
-    crate::log_info!("Interrupt Descriptor Table (IDT) loaded with enhanced CPU exceptions, IST1 (#DF), and Timer IRQ0.");
+    crate::log_info!("Interrupt Descriptor Table (IDT) loaded with CPU exceptions, Timer IRQ0, Keyboard IRQ1, and Mouse IRQ12.");
 }
 
 pub fn get_idt_entry(vector: usize) -> Option<IdtEntry> {

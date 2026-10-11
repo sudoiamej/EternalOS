@@ -109,8 +109,15 @@ pub fn console_write_byte(b: u8) {
     // 1. Output to serial
     if b == b'\n' {
         SerialPort::write_byte(b'\r');
+        SerialPort::write_byte(b);
+    } else if b == 0x08 {
+        // Send backspace, space, backspace to properly erase character on terminal emulator
+        SerialPort::write_byte(0x08);
+        SerialPort::write_byte(b' ');
+        SerialPort::write_byte(0x08);
+    } else {
+        SerialPort::write_byte(b);
     }
-    SerialPort::write_byte(b);
 
     // 2. Output to framebuffer
     with_framebuffer(|fb| {
@@ -147,7 +154,7 @@ pub fn console_write_byte(b: u8) {
         } else if b == b'\r' {
             con.cursor_x = con.min_x;
         } else if b == 0x08 {
-            // Backspace
+            // Backspace: Erase character at cursor position
             if con.cursor_x >= con.min_x + 8 {
                 con.cursor_x -= 8;
                 fb.draw_char(con.cursor_x, con.cursor_y, ' ', Color::TEXT_PRIMARY, Some(bg_color));
@@ -184,8 +191,11 @@ pub fn console_write(s: &str) {
     }
 }
 
-/// Read a single byte from console input (checks UART COM1, blocking or non-blocking)
+/// Read a single byte from console input (checks keyboard input queue first, then UART COM1)
 pub fn console_read_byte() -> Option<u8> {
+    if let Some(b) = crate::input::pop_char() {
+        return Some(b);
+    }
     SerialPort::read_byte()
 }
 
