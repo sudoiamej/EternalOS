@@ -6,6 +6,9 @@ use core::arch::asm;
 use limine::BaseRevision;
 use limine::request::{FramebufferRequest, RequestsEndMarker, RequestsStartMarker};
 
+pub mod heap;
+#[cfg(feature = "test-heap")]
+pub mod heap_tests;
 pub mod idt;
 pub mod mm;
 #[cfg(feature = "test-memory")]
@@ -36,11 +39,11 @@ unsafe extern "C" fn kmain() -> ! {
 
     println!();
     println!("====================================================");
-    println!("       [Project EternalOS] - Phase 3 Kernel         ");
+    println!("       [Project EternalOS] - Phase 4 Kernel         ");
     println!("====================================================");
     log_info!("Architecture : x86-64 (AMD64 / Intel 64)");
     log_info!("Boot Protocol: Limine (Revision: Base)");
-    log_info!("Kernel Subsys: Diagnostics, IDT, PMM & VM Foundations");
+    log_info!("Kernel Subsys: IDT, PMM, Paging & Kernel Heap");
 
     if BASE_REVISION.is_supported() {
         log_info!("Limine Base Revision handshake: Supported");
@@ -77,13 +80,23 @@ unsafe extern "C" fn kmain() -> ! {
     // 3. Inspect Physical Memory Map
     mm::parse_memory_map();
 
-    // 4. Initialize Bitmap Physical Page-Frame Allocator
+    // 4. Initialize Bitmap Physical Page-Frame Allocator (PMM)
     mm::init_frame_allocator();
 
     // 5. Inspect Active Virtual Memory / Paging Mode
     vm::inspect_paging_environment();
 
-    // 6. Test Hooks
+    // 6. Initialize Dynamic Kernel Heap Allocator
+    if let Err(e) = heap::init_heap() {
+        log_error!("Failed to initialize Kernel Heap: {}", e);
+    }
+
+    // 7. Test Hooks
+    #[cfg(feature = "test-heap")]
+    {
+        heap_tests::run_phase4_heap_tests();
+    }
+
     #[cfg(feature = "test-memory")]
     {
         mm_tests::run_phase3_memory_tests();

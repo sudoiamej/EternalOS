@@ -9,6 +9,7 @@ test-div-zero = []
 test-invalid-opcode = []
 test-panic = []
 test-memory = []
+test-heap = []
 
 [dependencies]
 limine = "0.5"
