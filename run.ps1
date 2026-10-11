@@ -41,10 +41,16 @@ Copy-Item "$PSScriptRoot\boot\BOOTX64.EFI" "$stageDir\EFI\BOOT\BOOTX64.EFI" -For
 Copy-Item "$PSScriptRoot\boot\limine.conf" "$stageDir\boot\limine\limine.conf" -Force
 Copy-Item $kernelBin "$stageDir\boot\eternal_kernel" -Force
 
-Write-Host ">>> [3/4] Preparing QEMU Firmware..." -ForegroundColor Cyan
+Write-Host ">>> [3/4] Preparing QEMU Firmware & Storage..." -ForegroundColor Cyan
 $ovmf = "C:\Program Files\qemu\share\edk2-x86_64-code.fd"
 if (-not (Test-Path $ovmf)) {
     throw "OVMF UEFI firmware not found at $ovmf"
+}
+
+# Ensure disposable test disk exists for block storage validation
+$testDisk = "$env:TEMP\eternalos_test_disk.img"
+if (-not (Test-Path $testDisk)) {
+    & "C:\Program Files\qemu\qemu-img.exe" create -f raw $testDisk 10M | Out-Null
 }
 
 $qemuArgs = @(
@@ -52,6 +58,8 @@ $qemuArgs = @(
     "-m", "512M",
     "-drive", "if=pflash,unit=0,format=raw,file=$ovmf,readonly=on",
     "-drive", "file=fat:rw:$stageDir,format=raw",
+    "-drive", "id=testdisk,file=$testDisk,format=raw,if=none",
+    "-device", "virtio-blk-pci,drive=testdisk",
     "-serial", "stdio",
     "-no-reboot"
 )

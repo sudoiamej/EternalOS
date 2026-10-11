@@ -22,6 +22,7 @@ test-vmem-fault = []
 test-arch = []
 test-pci = []
 test-graphics = []
+test-storage = []
 
 [dependencies]
 limine = "0.5"

@@ -59,6 +59,34 @@ EternalOS/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
 
+## 💾 Block Storage Foundation & VirtIO Driver (Phase 13B)
+
+### 1. Architecture & Capabilities
+- **Hardware-Independent Block Layer (`block.rs`):**
+  - Trait `BlockDevice`: provides device capabilities (`BlockDeviceInfo`), bounded sector reads (`read_sectors`), bounded sector writes (`write_sectors`), and cache flush operations (`flush`).
+  - Validation engine (`validate_request`): protects against zero-sector requests, end-of-device range overruns, buffer truncation, and arithmetic overflow.
+  - Granular error classification (`BlockError`): handles out-of-bounds, buffer misalignment, controller timeouts, hardware errors, read-only policies, and DMA allocation failures.
+- **VirtIO Block Hardware Driver (`virtio_blk.rs`):**
+  - Legacy PCI transport driver communicating over I/O ports discovered via PCI BAR0 (`0x6000`).
+  - Statically allocated, page-aligned DMA ring buffer (`VirtioDmaPool`, 16 KiB BSS storage):
+    - Page 0: 256 Split Ring Descriptors (aligned 16 bytes).
+    - Page 1: 256 Available Ring entries (`VirtqAvail`).
+    - Page 2: 256 Used Ring entries (`VirtqUsed`, strictly aligned to 4096-byte boundary).
+    - Page 3: Request headers, status indicators, and 4096-byte bounce buffer.
+  - Safe physical address translation via kernel PML4 page tables (`translate_addr`).
+  - Synchronous bounded polling with memory fences (`fence(SeqCst)`) for deterministic command completion.
+- **Disposable QEMU Test Disk:**
+  - Configured and automatically created in `$env:TEMP\eternalos_test_disk.img` (10 MiB raw image).
+  - Attached via QEMU CLI arguments `-drive id=testdisk,file=...,format=raw,if=none -device virtio-blk-pci,drive=testdisk`.
+- **Deterministic Test Suite (`test-storage`):**
+  - Test 1: Bounds validation and arithmetic overflow rejection.
+  - Test 2: In-memory RAM disk single sector roundtrip.
+  - Test 3: In-memory RAM disk multi-sector (4 sectors / 2048 bytes) integrity.
+  - Test 4: Read-only protection policy enforcement.
+  - Test 5: Real VirtIO hardware sector write and read-after-write verification on the QEMU test disk.
+
+---
+
 ## 🎨 Framebuffer & Early Graphics Subsystem (Phase 13A)
 
 ### 1. Architecture & Capabilities

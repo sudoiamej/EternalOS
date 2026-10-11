@@ -40,6 +40,10 @@ pub mod logo_asset;
 pub mod pci;
 #[cfg(feature = "test-pci")]
 pub mod pci_tests;
+pub mod block;
+pub mod virtio_blk;
+#[cfg(feature = "test-storage")]
+pub mod storage_tests;
 pub mod timer;
 pub mod vm;
 
@@ -105,16 +109,23 @@ unsafe extern "C" fn kmain() -> ! {
     // 9. Discover PCI/PCIe Hardware & Enumerate Buses (Mechanism #1)
     pci::init();
 
-    // 10. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
+    // 10. Initialize Block Storage (VirtIO Block Driver)
+    virtio_blk::init();
+
+    // 11. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
     timer::init_pit(100);
 
-    // 11. Enable CPU Interrupts
+    // 12. Enable CPU Interrupts
     unsafe {
         asm!("sti", options(nomem, nostack, preserves_flags));
     }
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
-    // 12. Test Hooks
+    // 13. Test Hooks
+    #[cfg(feature = "test-storage")]
+    {
+        storage_tests::run_phase13b_storage_tests();
+    }
     #[cfg(feature = "test-graphics")]
     {
         graphics_tests::run_phase13a_graphics_tests();
