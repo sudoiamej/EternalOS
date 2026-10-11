@@ -46,6 +46,12 @@ pub fn wait_controller_ready() -> bool {
     false
 }
 
+/// Check if PS/2 controller has keyboard data ready (Bit 0 set, Bit 5 clear)
+pub unsafe fn has_data() -> bool {
+    let status = unsafe { inb(PS2_STATUS_PORT) };
+    (status & 0x01) != 0 && (status & 0x20) == 0
+}
+
 /// Wait until controller output buffer has data to read
 pub fn wait_controller_output() -> bool {
     for _ in 0..10_000 {

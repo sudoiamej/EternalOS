@@ -191,11 +191,22 @@ pub fn console_write(s: &str) {
     }
 }
 
-/// Read a single byte from console input (checks keyboard input queue first, then UART COM1)
+/// Read a single byte from console input (checks keyboard input queue first, then polled PS/2, then UART COM1)
 pub fn console_read_byte() -> Option<u8> {
+    // 1. Buffered characters from interrupt handler
     if let Some(b) = crate::input::pop_char() {
         return Some(b);
     }
+
+    // 2. Poll PS/2 controller directly (covers cases where guest interrupts are temporarily disabled or unrouted)
+    if unsafe { crate::keyboard::has_data() } {
+        crate::keyboard::handle_interrupt();
+        if let Some(b) = crate::input::pop_char() {
+            return Some(b);
+        }
+    }
+
+    // 3. Serial Port COM1
     SerialPort::read_byte()
 }
 

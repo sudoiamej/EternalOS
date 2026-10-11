@@ -97,21 +97,28 @@ impl<T> SpinLock<T> {
     /// Acquire the spinlock. Disables CPU interrupts to prevent ISR deadlocks on single-core BSP.
     #[inline]
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
-        // Disable interrupts while holding this spinlock
+        let rflags: u64;
         unsafe {
-            core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
+            core::arch::asm!(
+                "pushfq",
+                "pop {}",
+                "cli",
+                out(reg) rflags,
+                options(nomem, preserves_flags)
+            );
         }
 
         while self.lock.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
             core::hint::spin_loop();
         }
 
-        SpinLockGuard { parent: self }
+        SpinLockGuard { parent: self, was_enabled: (rflags & 0x0200) != 0 }
     }
 }
 
 pub struct SpinLockGuard<'a, T> {
     parent: &'a SpinLock<T>,
+    was_enabled: bool,
 }
 
 impl<T> Deref for SpinLockGuard<'_, T> {
@@ -130,8 +137,10 @@ impl<T> DerefMut for SpinLockGuard<'_, T> {
 impl<T> Drop for SpinLockGuard<'_, T> {
     fn drop(&mut self) {
         self.parent.lock.store(false, Ordering::Release);
-        unsafe {
-            core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
+        if self.was_enabled {
+            unsafe {
+                core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
+            }
         }
     }
 }
