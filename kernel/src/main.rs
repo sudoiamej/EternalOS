@@ -24,6 +24,8 @@ pub mod task;
 pub mod sleep_tests;
 #[cfg(feature = "test-task")]
 pub mod task_tests;
+#[cfg(feature = "test-reliability")]
+pub mod reliability_tests;
 pub mod timer;
 pub mod vm;
 
@@ -145,12 +147,26 @@ unsafe extern "C" fn kmain() -> ! {
         mm_tests::run_phase3_memory_tests();
     }
 
+    #[cfg(feature = "test-reliability")]
+    {
+        reliability_tests::run_phase9_reliability_tests();
+    }
+
     #[cfg(feature = "test-div-zero")]
     {
         log_warn!(">>> TRIGGERING TEST: Divide-By-Zero Exception (#DE)...");
-        let a = 42;
-        let b = 0;
-        let _c = a / b;
+        unsafe {
+            let divisor = 0u64;
+            asm!(
+                "mov rdx, 0",
+                "mov rax, 42",
+                "div {0}",
+                in(reg) divisor,
+                out("rax") _,
+                out("rdx") _,
+                options(nomem, nostack)
+            );
+        }
     }
 
     #[cfg(feature = "test-invalid-opcode")]
@@ -158,6 +174,26 @@ unsafe extern "C" fn kmain() -> ! {
         log_warn!(">>> TRIGGERING TEST: Invalid Opcode Exception (#UD)...");
         unsafe {
             asm!("ud2", options(nomem, nostack));
+        }
+    }
+
+    #[cfg(feature = "test-gpf")]
+    {
+        log_warn!(">>> TRIGGERING TEST: General Protection Fault (#GP)...");
+        unsafe {
+            // Loading an invalid segment selector (e.g. 0x0043 or out-of-limit selector) into DS triggers #GP with error code
+            let bad_selector: u16 = 0x00ff;
+            asm!("mov ds, {0:x}", in(reg) bad_selector, options(nomem, nostack));
+        }
+    }
+
+    #[cfg(feature = "test-pagefault")]
+    {
+        log_warn!(">>> TRIGGERING TEST: Page Fault Exception (#PF)...");
+        unsafe {
+            // Access an unmapped virtual address in higher-half non-canonical or unmapped space
+            let bad_ptr = 0xffff_dead_beef_0000 as *const u64;
+            let _val = core::ptr::read_volatile(bad_ptr);
         }
     }
 
@@ -173,15 +209,31 @@ unsafe extern "C" fn kmain() -> ! {
     hcf();
 }
 
+static PANIC_RECURSION: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
 #[panic_handler]
 fn rust_panic(info: &core::panic::PanicInfo) -> ! {
-    log_error!("================== KERNEL PANIC ==================");
-    if let Some(location) = info.location() {
-        log_error!("Location: {}:{}:{}", location.file(), location.line(), location.column());
+    // 1. Immediately disable all interrupts to freeze context and prevent timer preemption
+    unsafe {
+        asm!("cli", options(nomem, nostack, preserves_flags));
     }
-    log_error!("Message : {}", info.message());
-    log_error!("System halted safely to prevent corrupted state.");
-    log_error!("==================================================");
+
+    let recursion = PANIC_RECURSION.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+    if recursion == 0 {
+        // First-level panic: Attempt structured output
+        log_fatal!("================== KERNEL PANIC ==================");
+        if let Some(location) = info.location() {
+            log_fatal!("Location : {}:{}:{}", location.file(), location.line(), location.column());
+        }
+        log_fatal!("Message  : {}", info.message());
+        log_fatal!("Subsystem: Bootstrap Processor / Core Kernel");
+        log_fatal!("Action   : Halting CPU safely to prevent memory corruption.");
+        log_fatal!("==================================================");
+    } else if recursion == 1 {
+        // Recursive panic detected: Bypass formatting/locks and dump emergency alert
+        serial::emergency_write_str("\r\n[FATAL] DOUBLE PANIC DETECTED! Aborting formatted diagnostics.\r\n");
+    }
+
     hcf();
 }
 

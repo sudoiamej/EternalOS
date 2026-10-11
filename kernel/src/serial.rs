@@ -64,35 +64,62 @@ impl Write for SerialPort {
     }
 }
 
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Fatal,
+}
+
+impl LogLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LogLevel::Trace => "[TRACE]",
+            LogLevel::Debug => "[DEBUG]",
+            LogLevel::Info  => "[INFO] ",
+            LogLevel::Warn  => "[WARN] ",
+            LogLevel::Error => "[ERROR]",
+            LogLevel::Fatal => "[FATAL]",
+        }
+    }
+}
+
+pub fn emergency_write_str(s: &str) {
+    for b in s.bytes() {
+        if b == b'\n' {
+            SerialPort::write_byte(b'\r');
+        }
+        SerialPort::write_byte(b);
+    }
+}
+
+pub fn emergency_print(args: fmt::Arguments) {
+    // Force reset LOCK in emergency path to guarantee output even if a lock was held during panic
+    LOCK.store(false, Ordering::Release);
+    let mut serial = SerialPort;
+    let _ = serial.write_fmt(args);
+}
+
 pub fn _print(args: fmt::Arguments) {
-    // Basic re-entrancy safe lock
+    // Single-core BSP re-entrancy safe lock with recursion/deadlock protection
+    let mut spin_count = 0usize;
     while LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
         core::hint::spin_loop();
+        spin_count += 1;
+        if spin_count > 1_000_000 {
+            // Break lock to prevent system lockup if an interrupt or panic interrupted active printing
+            break;
+        }
     }
 
     let mut serial = SerialPort;
     let _ = serial.write_fmt(args);
 
     LOCK.store(false, Ordering::Release);
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub enum LogLevel {
-    Debug,
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            LogLevel::Debug => "[DEBUG]",
-            LogLevel::Info  => "[INFO] ",
-            LogLevel::Warn  => "[WARN] ",
-            LogLevel::Error => "[ERROR]",
-        }
-    }
 }
 
 pub fn log(level: LogLevel, args: fmt::Arguments) {
@@ -110,6 +137,13 @@ macro_rules! print {
 macro_rules! println {
     () => ($crate::print!("\n"));
     ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+}
+
+#[macro_export]
+macro_rules! log_trace {
+    ($($arg:tt)*) => {
+        $crate::serial::log($crate::serial::LogLevel::Trace, format_args!($($arg)*))
+    };
 }
 
 #[macro_export]
@@ -137,5 +171,12 @@ macro_rules! log_warn {
 macro_rules! log_error {
     ($($arg:tt)*) => {
         $crate::serial::log($crate::serial::LogLevel::Error, format_args!($($arg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! log_fatal {
+    ($($arg:tt)*) => {
+        $crate::serial::log($crate::serial::LogLevel::Fatal, format_args!($($arg)*))
     };
 }

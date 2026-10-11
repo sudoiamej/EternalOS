@@ -170,6 +170,70 @@ impl Scheduler {
         false
     }
 
+    /// Audit scheduler and task invariants. Returns Ok(()) or an error string describing invariant violation.
+    pub fn verify_invariants(&self) -> Result<(), &'static str> {
+        let mut running_count = 0;
+        let mut ids: [u64; MAX_TASKS] = [0; MAX_TASKS];
+        let mut id_count = 0;
+
+        for (idx, slot) in self.tasks.iter().enumerate() {
+            if let Some(t) = slot {
+                // Invariant 1: Task ID must be unique
+                for i in 0..id_count {
+                    if ids[i] == t.id {
+                        return Err("Scheduler invariant violated: duplicate task ID detected");
+                    }
+                }
+                ids[id_count] = t.id;
+                id_count += 1;
+
+                // Invariant 2: Current index must match running task if state is Running
+                if t.state == TaskState::Running {
+                    running_count += 1;
+                    if idx != self.current {
+                        return Err("Scheduler invariant violated: task marked Running is not at current scheduler index");
+                    }
+                }
+
+                // Invariant 3: Stack pointers must be canonical and properly bounded if task has a stack (id != 0)
+                if t.id != 0 {
+                    if !t.stack_bottom.is_canonical() || !t.stack_top.is_canonical() {
+                        return Err("Scheduler invariant violated: non-canonical stack pointer in task");
+                    }
+                    if t.stack_bottom.as_u64() >= t.stack_top.as_u64() {
+                        return Err("Scheduler invariant violated: stack_bottom >= stack_top");
+                    }
+                }
+            }
+        }
+
+        // Invariant 4: No more than 1 task may be in Running state simultaneously on single-core BSP
+        if running_count > 1 {
+            return Err("Scheduler invariant violated: multiple tasks simultaneously marked Running");
+        }
+
+        Ok(())
+    }
+
+    /// Expose tasks slice for read-only diagnostics/tests
+    pub fn task_at(&self, idx: usize) -> Option<&Task> {
+        if idx < MAX_TASKS {
+            self.tasks[idx].as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Expose mutable task reference for controlled invariant violation testing
+    #[cfg(feature = "test-reliability")]
+    pub unsafe fn task_at_mut(&mut self, idx: usize) -> Option<&mut Task> {
+        if idx < MAX_TASKS {
+            self.tasks[idx].as_mut()
+        } else {
+            None
+        }
+    }
+
     /// Wake up any sleeping tasks whose deadlines have arrived.
     pub fn check_sleeping_tasks(&mut self, current_ticks: u64) -> usize {
         let mut woken = 0;

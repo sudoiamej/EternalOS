@@ -60,6 +60,20 @@ impl WaitQueue {
         }
         false
     }
+
+    pub fn verify_invariants(&self) -> Result<(), &'static str> {
+        if self.count > MAX_TASKS {
+            return Err("WaitQueue invariant violated: count exceeds MAX_TASKS capacity");
+        }
+        if self.head >= MAX_TASKS || self.tail >= MAX_TASKS {
+            return Err("WaitQueue invariant violated: head or tail pointer out of bounds");
+        }
+        let computed_tail = (self.head + self.count) % MAX_TASKS;
+        if computed_tail != self.tail {
+            return Err("WaitQueue invariant violated: tail does not match (head + count) % MAX_TASKS");
+        }
+        Ok(())
+    }
 }
 
 /// A kernel spinlock used solely to protect synchronization metadata (WaitQueues)
@@ -170,7 +184,9 @@ impl<T> Mutex<T> {
                 if self.owner.compare_exchange(NO_OWNER, current, Ordering::Acquire, Ordering::Relaxed).is_ok() {
                     return MutexGuard { mutex: self };
                 }
-                wq.enqueue(current);
+                if !wq.contains(current) {
+                    wq.enqueue(current);
+                }
             }
 
             // Block current task in scheduler; scheduler will context switch to another task
@@ -272,7 +288,9 @@ impl Semaphore {
             // No permit was available, we must block on the wait queue
             {
                 let mut wq = self.wait_queue.lock();
-                wq.enqueue(current);
+                if !wq.contains(current) {
+                    wq.enqueue(current);
+                }
             }
             block_current_task();
         }

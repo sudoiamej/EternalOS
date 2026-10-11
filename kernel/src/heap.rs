@@ -150,6 +150,13 @@ impl FreeListAllocator {
     pub fn stats(&self) -> (usize, usize, usize) {
         (self.heap_end - self.heap_start, self.total_allocated, self.total_freed)
     }
+
+    pub fn verify_invariants(&self) -> Result<(), &'static str> {
+        if self.heap_start >= self.heap_end {
+            return Err("Heap invariant violated: heap_start >= heap_end");
+        }
+        Ok(())
+    }
 }
 
 pub struct LockedHeap {

@@ -83,16 +83,20 @@ pub struct IdtPointer {
 static mut IDT: Idt = Idt::new();
 
 pub extern "x86-interrupt" fn divide_by_zero_handler(stack_frame: InterruptStackFrame) {
-    crate::log_error!("[CPU EXCEPTION #DE] Divide-by-Zero Exception occurred!");
-    crate::log_error!("Stack Frame: {}", stack_frame);
-    crate::log_error!("Halting CPU to prevent undefined behavior.");
+    crate::log_fatal!("==================================================");
+    crate::log_fatal!("[CPU EXCEPTION #DE] Divide-by-Zero Exception (Vector 0)");
+    crate::log_fatal!("Stack Frame: {}", stack_frame);
+    crate::log_fatal!("Halting CPU safely to prevent undefined behavior.");
+    crate::log_fatal!("==================================================");
     crate::hcf();
 }
 
 pub extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFrame) {
-    crate::log_error!("[CPU EXCEPTION #UD] Invalid Opcode Exception occurred!");
-    crate::log_error!("Stack Frame: {}", stack_frame);
-    crate::log_error!("Halting CPU to prevent undefined behavior.");
+    crate::log_fatal!("==================================================");
+    crate::log_fatal!("[CPU EXCEPTION #UD] Invalid Opcode Exception (Vector 6)");
+    crate::log_fatal!("Stack Frame: {}", stack_frame);
+    crate::log_fatal!("Halting CPU safely to prevent undefined behavior.");
+    crate::log_fatal!("==================================================");
     crate::hcf();
 }
 
@@ -100,9 +104,38 @@ pub extern "x86-interrupt" fn double_fault_handler(
     stack_frame: InterruptStackFrame,
     error_code: u64,
 ) -> ! {
-    crate::log_error!("[CPU EXCEPTION #DF] Double Fault occurred! Error Code: {:#x}", error_code);
-    crate::log_error!("Stack Frame: {}", stack_frame);
-    crate::log_error!("Halting CPU.");
+    crate::log_fatal!("==================================================");
+    crate::log_fatal!("[CPU EXCEPTION #DF] Double Fault (Vector 8)!");
+    crate::log_fatal!("Error Code : {:#x}", error_code);
+    crate::log_fatal!("Stack Frame: {}", stack_frame);
+    crate::log_fatal!("Halting CPU.");
+    crate::log_fatal!("==================================================");
+    crate::hcf();
+}
+
+pub extern "x86-interrupt" fn invalid_tss_handler(
+    stack_frame: InterruptStackFrame,
+    error_code: u64,
+) {
+    crate::log_fatal!("==================================================");
+    crate::log_fatal!("[CPU EXCEPTION #TS] Invalid TSS Exception (Vector 10)!");
+    crate::log_fatal!("Error Code : {:#x}", error_code);
+    crate::log_fatal!("Stack Frame: {}", stack_frame);
+    crate::log_fatal!("Halting CPU.");
+    crate::log_fatal!("==================================================");
+    crate::hcf();
+}
+
+pub extern "x86-interrupt" fn stack_segment_fault_handler(
+    stack_frame: InterruptStackFrame,
+    error_code: u64,
+) {
+    crate::log_fatal!("==================================================");
+    crate::log_fatal!("[CPU EXCEPTION #SS] Stack-Segment Fault (Vector 12)!");
+    crate::log_fatal!("Error Code : {:#x}", error_code);
+    crate::log_fatal!("Stack Frame: {}", stack_frame);
+    crate::log_fatal!("Halting CPU.");
+    crate::log_fatal!("==================================================");
     crate::hcf();
 }
 
@@ -110,9 +143,40 @@ pub extern "x86-interrupt" fn general_protection_handler(
     stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    crate::log_error!("[CPU EXCEPTION #GP] General Protection Fault! Error Code: {:#x}", error_code);
-    crate::log_error!("Stack Frame: {}", stack_frame);
-    crate::log_error!("Halting CPU.");
+    crate::log_fatal!("==================================================");
+    crate::log_fatal!("[CPU EXCEPTION #GP] General Protection Fault (Vector 13)!");
+    crate::log_fatal!("Error Code : {:#x}", error_code);
+    crate::log_fatal!("Stack Frame: {}", stack_frame);
+    crate::log_fatal!("Halting CPU.");
+    crate::log_fatal!("==================================================");
+    crate::hcf();
+}
+
+pub extern "x86-interrupt" fn page_fault_handler(
+    stack_frame: InterruptStackFrame,
+    error_code: u64,
+) {
+    let cr2: u64;
+    unsafe {
+        asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack, preserves_flags));
+    }
+
+    let p = (error_code & (1 << 0)) != 0;
+    let wr = (error_code & (1 << 1)) != 0;
+    let us = (error_code & (1 << 2)) != 0;
+    let rsvd = (error_code & (1 << 3)) != 0;
+    let id = (error_code & (1 << 4)) != 0;
+
+    crate::log_fatal!("==================================================");
+    crate::log_fatal!("[CPU EXCEPTION #PF] Page Fault (Vector 14)!");
+    crate::log_fatal!("Faulting Virtual Address (CR2): {:#018x}", cr2);
+    crate::log_fatal!(
+        "Error Code: {:#x} [Present={}, Write={}, User={}, ReservedBit={}, InstructionFetch={}]",
+        error_code, p, wr, us, rsvd, id
+    );
+    crate::log_fatal!("Stack Frame: {}", stack_frame);
+    crate::log_fatal!("Halting CPU.");
+    crate::log_fatal!("==================================================");
     crate::hcf();
 }
 
@@ -147,7 +211,10 @@ pub fn init() {
         IDT.entries[0].set_handler(divide_by_zero_handler as *const () as usize);
         IDT.entries[6].set_handler(invalid_opcode_handler as *const () as usize);
         IDT.entries[8].set_handler(double_fault_handler as *const () as usize);
+        IDT.entries[10].set_handler(invalid_tss_handler as *const () as usize);
+        IDT.entries[12].set_handler(stack_segment_fault_handler as *const () as usize);
         IDT.entries[13].set_handler(general_protection_handler as *const () as usize);
+        IDT.entries[14].set_handler(page_fault_handler as *const () as usize);
         IDT.entries[32].set_handler(timer_interrupt_handler as *const () as usize);
 
         let idt_ptr = IdtPointer {
@@ -158,5 +225,5 @@ pub fn init() {
         asm!("lidt [{}]", in(reg) &idt_ptr, options(readonly, nostack, preserves_flags));
     }
 
-    crate::log_info!("Interrupt Descriptor Table (IDT) loaded with CPU exceptions and Timer IRQ0 (Vector 32).");
+    crate::log_info!("Interrupt Descriptor Table (IDT) loaded with enhanced CPU exceptions and Timer IRQ0.");
 }

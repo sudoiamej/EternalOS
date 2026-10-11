@@ -140,6 +140,16 @@ impl FrameAllocator {
     pub fn used_frames(&self) -> usize {
         self.used_frames
     }
+
+    pub fn verify_invariants(&self) -> Result<(), &'static str> {
+        if self.used_frames > self.total_frames {
+            return Err("FrameAllocator invariant violated: used_frames exceeds total_frames");
+        }
+        if self.last_allocated_idx > self.total_frames {
+            return Err("FrameAllocator invariant violated: last_allocated_idx exceeds total_frames");
+        }
+        Ok(())
+    }
 }
 
 /// Synchronization lock and interior mutability wrapper

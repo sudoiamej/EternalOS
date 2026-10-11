@@ -47,10 +47,25 @@ EternalOS/
 │       ├── preempt_tests.rs# Phase 6 hardware timer preemption test suite
 │       ├── sync.rs         # Phase 7 synchronization primitives: Mutex, Semaphore, WaitQueue, SpinLock
 │       ├── sync_tests.rs   # Phase 7 synchronization verification suite
-│       └── sleep_tests.rs  # Phase 8 kernel timers, sleep queues, and lifecycle test suite
+│       ├── sleep_tests.rs  # Phase 8 kernel timers, sleep queues, and lifecycle test suite
+│       └── reliability_tests.rs # Phase 9 reliability, diagnostics, and invariant verification suite
 └── tools/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
+
+---
+
+## 🛡️ Kernel Reliability, Diagnostics & Invariant Verification (Phase 9)
+
+### 1. Diagnostics & Failure Handling Architecture
+- **Structured Logging:** Severity levels (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`) with single-core spinlock re-entrancy and bounded deadlock protection (lock breaking after 1,000,000 spin attempts).
+- **Hardened Panic Path:** `rust_panic` freezes context via immediate `cli`, features atomic latching to detect double-panics, and provides an unformatted emergency output path (`emergency_write_str`) without heap allocations or locks.
+- **CPU Exception Handlers:**
+  - Expanded IDT exception handlers for `#DE` (0), `#UD` (6), `#DF` (8), `#TS` (10), `#SS` (12), `#GP` (13), and `#PF` (14).
+  - Page faults read CR2 and decode hardware error bits (`Present`, `Write`, `User`, `ReservedBit`, `InstructionFetch`).
+  - GPF reports hardware selector error codes and stack frame details (`RIP`, `CS`, `RFLAGS`, `RSP`, `SS`).
+- **SIMD/FPU Safety Policy:** Target configuration `-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,+soft-float` strictly restricts compiler-generated SIMD/floating-point instructions. Preemptible kernel tasks run with pure integer soft-float semantics, avoiding register clobber without requiring XSAVE/FXSAVE overhead on the hybrid kernel baseline.
+- **Invariant Verifiers:** Audited invariant validators in `Scheduler::verify_invariants`, `FrameAllocator::verify_invariants`, `FreeListAllocator::verify_invariants`, and `WaitQueue::verify_invariants`.
 
 ---
 
@@ -85,13 +100,23 @@ EternalOS/
 .\run.ps1 -Headless
 ```
 
-### 2. Run Phase 8 Kernel Timers & Sleep Tests
+### 2. Run Phase 9 Kernel Reliability & Invariant Tests
 ```powershell
-.\run.ps1 -Headless -Feature test-sleep
+.\run.ps1 -Headless -Feature test-reliability
 ```
 
-### 3. Run Prior Subsystem Test Suites (Regression Verification)
+### 3. Run Controlled Exception & Panic Fault Tests
 ```powershell
+.\run.ps1 -Headless -Feature test-pagefault
+.\run.ps1 -Headless -Feature test-gpf
+.\run.ps1 -Headless -Feature test-invalid-opcode
+.\run.ps1 -Headless -Feature test-div-zero
+.\run.ps1 -Headless -Feature test-panic
+```
+
+### 4. Run Prior Subsystem Test Suites (Regression Verification)
+```powershell
+.\run.ps1 -Headless -Feature test-sleep
 .\run.ps1 -Headless -Feature test-sync
 .\run.ps1 -Headless -Feature test-preempt
 .\run.ps1 -Headless -Feature test-task
