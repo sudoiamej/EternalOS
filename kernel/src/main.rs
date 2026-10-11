@@ -26,6 +26,8 @@ pub mod sleep_tests;
 pub mod task_tests;
 #[cfg(feature = "test-reliability")]
 pub mod reliability_tests;
+#[cfg(feature = "test-vmem")]
+pub mod vmem_tests;
 pub mod timer;
 pub mod vm;
 
@@ -150,6 +152,26 @@ unsafe extern "C" fn kmain() -> ! {
     #[cfg(feature = "test-reliability")]
     {
         reliability_tests::run_phase9_reliability_tests();
+    }
+
+    #[cfg(feature = "test-vmem")]
+    {
+        vmem_tests::run_phase10_vmem_tests();
+    }
+
+    #[cfg(feature = "test-vmem-fault")]
+    {
+        log_warn!(">>> TRIGGERING TEST: Write to Read-Only Page Fault (#PF)...");
+        // Allocate and map a read-only page
+        let ro_virt = vm::VirtAddr::new(0xffff_b000_0000_0000);
+        let ro_frame = mm::allocate_frame().expect("PMM alloc failed");
+        unsafe {
+            // Map strictly as PRESENT without WRITABLE
+            vm::map_page(ro_virt, ro_frame, vm::PageTableFlags::NO_EXECUTE).expect("Map RO failed");
+            let ro_ptr = ro_virt.as_mut_ptr::<u32>();
+            // Attempt write to trigger hardware #PF with Write=true
+            core::ptr::write_volatile(ro_ptr, 0x1337);
+        }
     }
 
     #[cfg(feature = "test-div-zero")]

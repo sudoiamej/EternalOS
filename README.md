@@ -48,10 +48,25 @@ EternalOS/
 │       ├── sync.rs         # Phase 7 synchronization primitives: Mutex, Semaphore, WaitQueue, SpinLock
 │       ├── sync_tests.rs   # Phase 7 synchronization verification suite
 │       ├── sleep_tests.rs  # Phase 8 kernel timers, sleep queues, and lifecycle test suite
-│       └── reliability_tests.rs # Phase 9 reliability, diagnostics, and invariant verification suite
+│       ├── reliability_tests.rs # Phase 9 reliability, diagnostics, and invariant verification suite
+│       └── vmem_tests.rs   # Phase 10 advanced virtual memory & page-table test suite
 └── tools/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
+
+---
+
+## 🗺️ Advanced Virtual Memory & x86-64 Page Tables (Phase 10)
+
+### 1. Architecture & Capabilities
+- **4-Level Paging Walk:** Full standard x86-64 page-table hierarchy (`PML4` -> `PDPT` -> `PD` -> `PT`) walking and inspection via Higher-Half Direct Map (`HHDM`).
+- **Translation:** `translate_addr(vaddr)` converts canonical virtual addresses into physical addresses, supporting 4 KiB leaves as well as 2 MiB and 1 GiB huge page mappings.
+- **Mapping Operations:**
+  - `map_page(vaddr, pframe, flags)`: Allocates intermediate tables on demand, binds 4 KiB leaf entry, and flushes TLB via `invlpg`.
+  - `unmap_page(vaddr)`: Clears leaf entry, flushes TLB, and automatically reclaims empty intermediate tables (`PT`, `PD`, `PDPT`) back to the Physical Memory Manager (PMM).
+  - `update_page_flags(vaddr, flags)`: Atomically updates leaf entry permissions and flushes local TLB without altering physical address binding.
+- **Decoupled Lifetime:** Unmapping a page strictly severs the virtual-to-physical translation without automatically freeing the underlying physical frame unless the caller explicitly deallocates it.
+- **Hardware Permission Enforcement:** Verified hardware enforcement of read-only permissions via isolated fault testing (`test-vmem-fault`).
 
 ---
 
@@ -100,13 +115,14 @@ EternalOS/
 .\run.ps1 -Headless
 ```
 
-### 2. Run Phase 9 Kernel Reliability & Invariant Tests
+### 2. Run Phase 10 Virtual Memory & Page Table Tests
 ```powershell
-.\run.ps1 -Headless -Feature test-reliability
+.\run.ps1 -Headless -Feature test-vmem
 ```
 
-### 3. Run Controlled Exception & Panic Fault Tests
+### 3. Run Controlled Exception & Fault Tests
 ```powershell
+.\run.ps1 -Headless -Feature test-vmem-fault
 .\run.ps1 -Headless -Feature test-pagefault
 .\run.ps1 -Headless -Feature test-gpf
 .\run.ps1 -Headless -Feature test-invalid-opcode
@@ -116,6 +132,7 @@ EternalOS/
 
 ### 4. Run Prior Subsystem Test Suites (Regression Verification)
 ```powershell
+.\run.ps1 -Headless -Feature test-reliability
 .\run.ps1 -Headless -Feature test-sleep
 .\run.ps1 -Headless -Feature test-sync
 .\run.ps1 -Headless -Feature test-preempt

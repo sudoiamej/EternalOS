@@ -81,7 +81,7 @@ impl VirtAddr {
 
     #[inline]
     pub const fn p3_index(self) -> usize {
-        ((self.0 >> 31) & 0x1ff) as usize
+        ((self.0 >> 30) & 0x1ff) as usize
     }
 
     #[inline]
@@ -139,6 +139,27 @@ impl PageTableEntry {
         self.0 = (frame.as_u64() & 0x000f_ffff_ffff_f000) | (flags & !0x000f_ffff_ffff_f000);
     }
 
+    pub fn flags(&self) -> u64 {
+        self.0 & !0x000f_ffff_ffff_f000
+    }
+
+    pub fn is_writable(&self) -> bool {
+        (self.0 & PageTableFlags::WRITABLE) != 0
+    }
+
+    pub fn is_user(&self) -> bool {
+        (self.0 & PageTableFlags::USER_ACCESSIBLE) != 0
+    }
+
+    pub fn is_no_execute(&self) -> bool {
+        (self.0 & PageTableFlags::NO_EXECUTE) != 0
+    }
+
+    pub fn set_flags(&mut self, flags: u64) {
+        let frame = self.phys_addr();
+        self.set_frame(frame, flags);
+    }
+
     pub fn clear(&mut self) {
         self.0 = 0;
     }
@@ -154,6 +175,25 @@ impl PageTable {
         Self {
             entries: [PageTableEntry::new(); 512],
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        for entry in self.entries.iter() {
+            if entry.is_present() {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn present_count(&self) -> usize {
+        let mut count = 0;
+        for entry in self.entries.iter() {
+            if entry.is_present() {
+                count += 1;
+            }
+        }
+        count
     }
 
     pub fn zero(&mut self) {
@@ -231,8 +271,71 @@ pub unsafe fn map_page(vaddr: VirtAddr, pframe: PhysAddr, flags: u64) -> Result<
     Ok(())
 }
 
-/// Unmaps a 4KiB virtual page from the active PML4 and returns the mapped physical frame
-pub unsafe fn unmap_page(vaddr: VirtAddr) -> Result<PhysAddr, &'static str> {
+/// Translates a virtual address to its corresponding physical address by walking the page tables.
+pub fn translate_addr(vaddr: VirtAddr) -> Result<PhysAddr, &'static str> {
+    if !vaddr.is_canonical() {
+        return Err("Virtual address is non-canonical");
+    }
+
+    let cr3 = Cr3::read();
+    let pml4_virt = phys_to_virt(cr3.pml4_phys).ok_or("HHDM offset not available")?;
+    let pml4 = unsafe { &*pml4_virt.as_ptr::<PageTable>() };
+
+    let p4_entry = &pml4.entries[vaddr.p4_index()];
+    if !p4_entry.is_present() {
+        return Err("Virtual address is not mapped (PML4 missing)");
+    }
+    if p4_entry.is_huge() {
+        return Err("Unexpected huge page entry at PML4 level");
+    }
+
+    let p3_virt = phys_to_virt(p4_entry.phys_addr()).ok_or("HHDM offset not available")?;
+    let p3_table = unsafe { &*p3_virt.as_ptr::<PageTable>() };
+
+    let p3_entry = &p3_table.entries[vaddr.p3_index()];
+    if !p3_entry.is_present() {
+        return Err("Virtual address is not mapped (PDPT missing)");
+    }
+    if p3_entry.is_huge() {
+        // 1 GiB huge page translation
+        let base = p3_entry.phys_addr().as_u64();
+        let offset = vaddr.as_u64() & 0x3fff_ffff;
+        return Ok(PhysAddr::new(base | offset));
+    }
+
+    let p2_virt = phys_to_virt(p3_entry.phys_addr()).ok_or("HHDM offset not available")?;
+    let p2_table = unsafe { &*p2_virt.as_ptr::<PageTable>() };
+
+    let p2_entry = &p2_table.entries[vaddr.p2_index()];
+    if !p2_entry.is_present() {
+        return Err("Virtual address is not mapped (PD missing)");
+    }
+    if p2_entry.is_huge() {
+        // 2 MiB huge page translation
+        let base = p2_entry.phys_addr().as_u64();
+        let offset = vaddr.as_u64() & 0x1f_ffff;
+        return Ok(PhysAddr::new(base | offset));
+    }
+
+    let p1_virt = phys_to_virt(p2_entry.phys_addr()).ok_or("HHDM offset not available")?;
+    let p1_table = unsafe { &*p1_virt.as_ptr::<PageTable>() };
+
+    let p1_entry = &p1_table.entries[vaddr.p1_index()];
+    if !p1_entry.is_present() {
+        return Err("Virtual address is not mapped (PT missing)");
+    }
+
+    let base = p1_entry.phys_addr().as_u64();
+    let offset = vaddr.page_offset() as u64;
+    Ok(PhysAddr::new(base | offset))
+}
+
+pub fn is_mapped(vaddr: VirtAddr) -> bool {
+    translate_addr(vaddr).is_ok()
+}
+
+/// Updates the permissions and flags of an existing mapped 4KiB page and flushes the TLB
+pub unsafe fn update_page_flags(vaddr: VirtAddr, flags: u64) -> Result<(), &'static str> {
     if !vaddr.is_aligned() {
         return Err("Virtual address is not 4KiB aligned");
     }
@@ -270,9 +373,75 @@ pub unsafe fn unmap_page(vaddr: VirtAddr) -> Result<PhysAddr, &'static str> {
         return Err("Page not mapped (PT missing)");
     }
 
+    let frame = p1_entry.phys_addr();
+    p1_entry.set_frame(frame, flags | PageTableFlags::PRESENT);
+    unsafe { invlpg(vaddr) };
+
+    Ok(())
+}
+
+/// Unmaps a 4KiB virtual page from the active PML4 and returns the mapped physical frame.
+/// Reclaims empty intermediate page tables (PT, PD, PDPT) back to the PMM if they have no present entries.
+pub unsafe fn unmap_page(vaddr: VirtAddr) -> Result<PhysAddr, &'static str> {
+    if !vaddr.is_aligned() {
+        return Err("Virtual address is not 4KiB aligned");
+    }
+    if !vaddr.is_canonical() {
+        return Err("Virtual address is non-canonical");
+    }
+
+    let cr3 = Cr3::read();
+    let pml4_virt = phys_to_virt(cr3.pml4_phys).ok_or("HHDM offset not available")?;
+    let pml4 = unsafe { &mut *pml4_virt.as_mut_ptr::<PageTable>() };
+
+    let p4_entry = &mut pml4.entries[vaddr.p4_index()];
+    if !p4_entry.is_present() {
+        return Err("Page not mapped (PML4 missing)");
+    }
+    let p3_frame = p4_entry.phys_addr();
+    let p3_virt = phys_to_virt(p3_frame).ok_or("HHDM offset not available")?;
+    let p3_table = unsafe { &mut *p3_virt.as_mut_ptr::<PageTable>() };
+
+    let p3_entry = &mut p3_table.entries[vaddr.p3_index()];
+    if !p3_entry.is_present() {
+        return Err("Page not mapped (PDPT missing)");
+    }
+    let p2_frame = p3_entry.phys_addr();
+    let p2_virt = phys_to_virt(p2_frame).ok_or("HHDM offset not available")?;
+    let p2_table = unsafe { &mut *p2_virt.as_mut_ptr::<PageTable>() };
+
+    let p2_entry = &mut p2_table.entries[vaddr.p2_index()];
+    if !p2_entry.is_present() {
+        return Err("Page not mapped (PD missing)");
+    }
+    let p1_frame = p2_entry.phys_addr();
+    let p1_virt = phys_to_virt(p1_frame).ok_or("HHDM offset not available")?;
+    let p1_table = unsafe { &mut *p1_virt.as_mut_ptr::<PageTable>() };
+
+    let p1_entry = &mut p1_table.entries[vaddr.p1_index()];
+    if !p1_entry.is_present() {
+        return Err("Page not mapped (PT missing)");
+    }
+
     let pframe = p1_entry.phys_addr();
     p1_entry.clear();
     unsafe { invlpg(vaddr) };
+
+    // Reclaim intermediate page table pages if they become completely empty
+    if p1_table.is_empty() {
+        p2_entry.clear();
+        let _ = crate::mm::deallocate_frame(p1_frame);
+
+        if p2_table.is_empty() {
+            p3_entry.clear();
+            let _ = crate::mm::deallocate_frame(p2_frame);
+
+            if p3_table.is_empty() {
+                p4_entry.clear();
+                let _ = crate::mm::deallocate_frame(p3_frame);
+            }
+        }
+    }
 
     Ok(pframe)
 }

@@ -17,6 +17,8 @@ test-sleep = []
 test-reliability = []
 test-gpf = []
 test-pagefault = []
+test-vmem = []
+test-vmem-fault = []
 
 [dependencies]
 limine = "0.5"
