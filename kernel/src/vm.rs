@@ -220,6 +220,13 @@ impl Cr3 {
             flags: (val & 0xfff) as u16,
         }
     }
+
+    pub unsafe fn write(cr3: Self) {
+        let val = (cr3.pml4_phys.as_u64() & 0x000f_ffff_ffff_f000) | (cr3.flags as u64 & 0xfff);
+        unsafe {
+            asm!("mov cr3, {}", in(reg) val, options(nostack, preserves_flags));
+        }
+    }
 }
 
 #[inline]
@@ -232,6 +239,119 @@ pub unsafe fn invlpg(vaddr: VirtAddr) {
 pub fn phys_to_virt(phys: PhysAddr) -> Option<VirtAddr> {
     let hhdm = get_hhdm_offset()?;
     phys.as_u64().checked_add(hhdm).map(VirtAddr::new)
+}
+
+/// Create a new user address space (PML4) by copying higher-half kernel mappings (entries 256..512).
+pub fn create_user_address_space() -> Result<PhysAddr, &'static str> {
+    let pml4_frame = allocate_frame().ok_or("PMM out of memory for user PML4")?;
+    let pml4_virt = phys_to_virt(pml4_frame).ok_or("HHDM not available")?;
+    let new_pml4 = unsafe { &mut *pml4_virt.as_mut_ptr::<PageTable>() };
+    new_pml4.zero();
+
+    // Copy higher-half kernel entries (256..512) from current active PML4
+    let current_cr3 = Cr3::read();
+    let current_pml4_virt = phys_to_virt(current_cr3.pml4_phys).ok_or("HHDM not available")?;
+    let current_pml4 = unsafe { &*current_pml4_virt.as_ptr::<PageTable>() };
+
+    for i in 256..512 {
+        new_pml4.entries[i] = current_pml4.entries[i];
+    }
+
+    Ok(pml4_frame)
+}
+
+/// Map a page in a specific PML4 table.
+pub unsafe fn map_page_in_table(
+    pml4_phys: PhysAddr,
+    vaddr: VirtAddr,
+    pframe: PhysAddr,
+    flags: u64,
+) -> Result<(), &'static str> {
+    if !vaddr.is_aligned() || !vaddr.is_canonical() || !pframe.is_aligned() {
+        return Err("Alignment or canonicality check failed");
+    }
+
+    let pml4_virt = phys_to_virt(pml4_phys).ok_or("HHDM offset not available")?;
+    let pml4 = unsafe { &mut *pml4_virt.as_mut_ptr::<PageTable>() };
+
+    let p4_idx = vaddr.p4_index();
+    let p3_table = get_or_create_next_table(&mut pml4.entries[p4_idx], flags)?;
+
+    let p3_idx = vaddr.p3_index();
+    let p2_table = get_or_create_next_table(&mut p3_table.entries[p3_idx], flags)?;
+
+    let p2_idx = vaddr.p2_index();
+    let p1_table = get_or_create_next_table(&mut p2_table.entries[p2_idx], flags)?;
+
+    let p1_idx = vaddr.p1_index();
+    let p1_entry = &mut p1_table.entries[p1_idx];
+    if p1_entry.is_present() {
+        return Err("Page already mapped");
+    }
+
+    p1_entry.set_frame(pframe, flags | PageTableFlags::PRESENT);
+
+    // If this table is currently loaded in CR3, invalidate TLB
+    if Cr3::read().pml4_phys == pml4_phys {
+        unsafe { invlpg(vaddr) };
+    }
+
+    Ok(())
+}
+
+/// Destroy a user address space by freeing all lower-half (0..256) page tables and mapped frames.
+pub unsafe fn destroy_user_address_space(pml4_phys: PhysAddr) -> Result<(), &'static str> {
+    let pml4_virt = phys_to_virt(pml4_phys).ok_or("HHDM not available")?;
+    let pml4 = unsafe { &mut *pml4_virt.as_mut_ptr::<PageTable>() };
+
+    for p4_idx in 0..256 {
+        let p4_entry = &mut pml4.entries[p4_idx];
+        if !p4_entry.is_present() {
+            continue;
+        }
+        let p3_frame = p4_entry.phys_addr();
+        let p3_virt = phys_to_virt(p3_frame).ok_or("HHDM not available")?;
+        let p3_table = unsafe { &mut *p3_virt.as_mut_ptr::<PageTable>() };
+
+        for p3_idx in 0..512 {
+            let p3_entry = &mut p3_table.entries[p3_idx];
+            if !p3_entry.is_present() {
+                continue;
+            }
+            let p2_frame = p3_entry.phys_addr();
+            let p2_virt = phys_to_virt(p2_frame).ok_or("HHDM not available")?;
+            let p2_table = unsafe { &mut *p2_virt.as_mut_ptr::<PageTable>() };
+
+            for p2_idx in 0..512 {
+                let p2_entry = &mut p2_table.entries[p2_idx];
+                if !p2_entry.is_present() {
+                    continue;
+                }
+                let p1_frame = p2_entry.phys_addr();
+                let p1_virt = phys_to_virt(p1_frame).ok_or("HHDM not available")?;
+                let p1_table = unsafe { &mut *p1_virt.as_mut_ptr::<PageTable>() };
+
+                for p1_idx in 0..512 {
+                    let p1_entry = &mut p1_table.entries[p1_idx];
+                    if p1_entry.is_present() {
+                        let leaf_frame = p1_entry.phys_addr();
+                        p1_entry.clear();
+                        let _ = crate::mm::deallocate_frame(leaf_frame);
+                    }
+                }
+                p2_entry.clear();
+                let _ = crate::mm::deallocate_frame(p1_frame);
+            }
+            p3_entry.clear();
+            let _ = crate::mm::deallocate_frame(p2_frame);
+        }
+        p4_entry.clear();
+        let _ = crate::mm::deallocate_frame(p3_frame);
+    }
+
+    // Finally free the PML4 frame itself
+    let _ = crate::mm::deallocate_frame(pml4_phys);
+    Ok(())
 }
 
 /// Maps a 4KiB virtual page to a physical frame in the active PML4

@@ -48,13 +48,18 @@ impl IdtEntry {
     }
 
     pub fn set_handler(&mut self, handler: usize) {
+        self.set_handler_dpl(handler, 0);
+    }
+
+    pub fn set_handler_dpl(&mut self, handler: usize, dpl: u8) {
         let cs: u16;
         unsafe {
             core::arch::asm!("mov {0:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags));
         }
         self.pointer_low = handler as u16;
         self.gdt_selector = cs; // Use active Limine kernel code segment selector (0x28)
-        self.options = 0x8E00;   // Present (bit 15), DPL 0, 64-bit Interrupt Gate (0xE)
+        let dpl_bits = ((dpl as u16) & 0x03) << 13;
+        self.options = 0x8E00 | dpl_bits; // Present (bit 15), DPL, 64-bit Interrupt Gate (0xE)
         self.pointer_middle = (handler >> 16) as u16;
         self.pointer_high = (handler >> 32) as u32;
         self.reserved = 0;
@@ -238,6 +243,7 @@ pub fn init() {
         IDT.entries[13].set_handler(general_protection_handler as *const () as usize);
         IDT.entries[14].set_handler(page_fault_handler as *const () as usize);
         IDT.entries[32].set_handler(timer_interrupt_handler as *const () as usize);
+        IDT.entries[0x80].set_handler_dpl(crate::syscall_handler::syscall_entry_stub as *const () as usize, 3);
 
         let idt_ptr = IdtPointer {
             limit: (core::mem::size_of::<Idt>() - 1) as u16,

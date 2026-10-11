@@ -50,6 +50,22 @@ impl SerialPort {
             Self::outb(Self::COM1, byte);
         }
     }
+
+    pub fn has_byte() -> bool {
+        unsafe {
+            (Self::inb(Self::COM1 + 5) & 0x01) != 0
+        }
+    }
+
+    pub fn read_byte() -> Option<u8> {
+        if Self::has_byte() {
+            unsafe {
+                Some(Self::inb(Self::COM1))
+            }
+        } else {
+            None
+        }
+    }
 }
 
 impl Write for SerialPort {

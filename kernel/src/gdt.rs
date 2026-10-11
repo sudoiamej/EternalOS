@@ -48,6 +48,28 @@ impl GdtDescriptor {
             base_high: 0,
         }
     }
+
+    pub const fn user_data() -> Self {
+        Self {
+            limit_low: 0,
+            base_low: 0,
+            base_middle: 0,
+            access: 0xF2, // Present, Ring 3 (DPL 3), Writable
+            granularity: 0x00,
+            base_high: 0,
+        }
+    }
+
+    pub const fn user_code() -> Self {
+        Self {
+            limit_low: 0,
+            base_low: 0,
+            base_middle: 0,
+            access: 0xFA, // Present, Ring 3 (DPL 3), Executable, Readable
+            granularity: 0x20, // 64-bit Long mode (L bit set)
+            base_high: 0,
+        }
+    }
 }
 
 /// 64-bit System Segment Descriptor (for TSS) - 16 bytes
@@ -145,10 +167,13 @@ pub static mut TSS: TaskStateSegment = TaskStateSegment::new();
 // 0x20: 32-bit data
 // 0x28: 64-bit kernel code (CS = 0x28)
 // 0x30: 64-bit kernel data (DS/SS = 0x30)
-// 0x38: 16-byte TSS descriptor (Index 7 & 8) -> Selector 0x38
+pub const USER_DS: u16 = 0x38 | 3; // 64-bit user data segment (RPL 3) -> 0x3B
+pub const USER_CS: u16 = 0x40 | 3; // 64-bit user code segment (RPL 3) -> 0x43
+pub const TSS_SELECTOR: u16 = 0x48; // 16-byte TSS descriptor -> Selector 0x48
+
 #[repr(C, align(16))]
 pub struct Gdt {
-    pub entries: [GdtDescriptor; 7],
+    pub entries: [GdtDescriptor; 9],
     pub tss: TssDescriptor,
 }
 
@@ -161,11 +186,11 @@ static mut GDT: Gdt = Gdt {
         GdtDescriptor::null(),        // 0x20
         GdtDescriptor::kernel_code(), // 0x28
         GdtDescriptor::kernel_data(), // 0x30
+        GdtDescriptor::user_data(),   // 0x38 (with RPL 3 = 0x3B)
+        GdtDescriptor::user_code(),   // 0x40 (with RPL 3 = 0x43)
     ],
-    tss: TssDescriptor::new(0, 0),
+    tss: TssDescriptor::new(0, 0),    // 0x48
 };
-
-pub const TSS_SELECTOR: u16 = 0x38;
 
 static GDT_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -195,6 +220,12 @@ pub fn get_tr() -> u16 {
         asm!("str {0:x}", out(reg) tr, options(nomem, nostack, preserves_flags));
     }
     tr
+}
+
+pub fn set_tss_rsp0(stack_top: u64) {
+    unsafe {
+        TSS.rsp0 = stack_top;
+    }
 }
 
 pub fn init() {

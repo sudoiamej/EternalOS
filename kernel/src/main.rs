@@ -54,6 +54,15 @@ pub mod vfs_tests;
 pub mod eternalfs_tests;
 pub mod timer;
 pub mod vm;
+pub mod console;
+pub mod syscall;
+pub mod syscall_handler;
+pub mod elf;
+pub mod process;
+pub mod shell;
+pub mod user_test_elf;
+#[cfg(feature = "test-userspace")]
+pub mod userspace_tests;
 
 #[used]
 #[unsafe(link_section = ".requests")]
@@ -133,6 +142,10 @@ unsafe extern "C" fn kmain() -> ! {
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
     // 14. Test Hooks
+    #[cfg(feature = "test-userspace")]
+    {
+        userspace_tests::run_phase15_userspace_tests();
+    }
     #[cfg(feature = "test-eternalfs")]
     {
         eternalfs_tests::run_phase14c_eternalfs_tests();

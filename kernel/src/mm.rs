@@ -355,3 +355,21 @@ pub fn allocate_frame() -> Option<PhysAddr> {
 pub fn deallocate_frame(frame: PhysAddr) -> Result<(), &'static str> {
     ALLOCATOR.lock().deallocate_frame(frame)
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct FrameAllocatorStats {
+    pub total_frames: usize,
+    pub used_frames: usize,
+    pub allocated_frames: usize,
+    pub free_frames: usize,
+}
+
+pub fn get_frame_allocator_stats() -> FrameAllocatorStats {
+    let alloc = ALLOCATOR.lock();
+    FrameAllocatorStats {
+        total_frames: alloc.total_frames(),
+        used_frames: alloc.used_frames(),
+        allocated_frames: alloc.used_frames(),
+        free_frames: alloc.free_frames(),
+    }
+}

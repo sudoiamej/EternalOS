@@ -59,6 +59,46 @@ EternalOS/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
 
+## 🐚 Userspace, Process Execution & Command-Line Shell (Phase 15)
+
+### 1. Architecture & Capabilities
+- **x86-64 User Mode (Ring 3 / CPL 3):**
+  - GDT user segment descriptors configured: `USER_DS` (selector `0x3B`, DPL 3) and `USER_CS` (selector `0x43`, DPL 3).
+  - Task State Segment (TSS) maintains privileged stack pointer (`rsp0`), dynamically updated during process switches for secure transition on interrupts and exceptions.
+- **Process Management & Address Space Isolation (`process.rs`):**
+  - Isolated PML4 per process (`create_user_address_space`): Higher-half kernel page tables (entries 256..512) are mapped identically, while lower-half user space (entries 0..256) is completely isolated and private.
+  - Page-table reclamation (`destroy_user_address_space`): Safely recurses through lower-half user PML4, PDPT, PD, and PT structures, unmapping and returning all physical frames to the frame allocator upon process exit.
+  - User stack located at `0x0000_7FFF_FFFF_0000` (4 KiB guard/stack frame).
+  - Genuine user mode entry via x86-64 `iretq` restoring `SS`, `RSP`, `RFLAGS` (`0x202` IF=1), `CS`, and `RIP`.
+- **ELF64 Executable Loader (`elf.rs`):**
+  - Validates ELF magic (`0x7F 'E' 'L' 'F'`), 64-bit ELF class, little-endian encoding, executable type (`ET_EXEC`), and machine target (`EM_X86_64`).
+  - Verifies entry point canonicality within user virtual address space (`< 0x0000_8000_0000_0000`).
+  - Loads and maps `PT_LOAD` segments with required user permissions (`PAGE_USER | PAGE_WRITABLE`), zero-filling BSS differences (`p_memsz > p_filesz`).
+- **Controlled System Call ABI (`int 0x80`, `syscall.rs`, `syscall_handler.rs`):**
+  - Registered IDT vector `0x80` with DPL 3 (`options = 0xEE00`).
+  - Strict user-pointer validation (`validate_user_buffer`, `copy_user_string`): Rejects addresses in kernel memory (`>= 0x0000_8000_0000_0000`), null pointers, or buffers that wrap around 64-bit address space.
+  - Implemented core system calls:
+    - `SYS_EXIT` (0): Terminate calling process with exit code.
+    - `SYS_WRITE` (1): Write bytes to stdout / stderr (renders to both UART serial and framebuffer console).
+    - `SYS_READ` (2): Read bytes from stdin (UART COM1 line receiver).
+    - `SYS_YIELD` (3): Voluntarily yield CPU time slice.
+    - `SYS_SYSINFO` (4): Query kernel version, uptime ticks, total/free memory frames, and active task count.
+    - `SYS_OPEN` (5), `SYS_CLOSE` (6), `SYS_READDIR` (7), `SYS_STAT` (8): VFS file and directory access.
+    - `SYS_SPAWN` (9), `SYS_WAITPID` (10): Process spawning and lifecycle waiting.
+- **Interactive Command-Line Shell (`shell.rs` & `console.rs`):**
+  - Dual-output console rendering to serial COM1 and graphical framebuffer.
+  - Interactive line editor with backspace handling, character echoing, and command dispatch.
+  - Built-in commands: `help`, `clear`, `echo`, `pwd`, `ls`, `cd`, `cat`, `stat`, `uname`, `meminfo`, and `exit`.
+- **Deterministic Test Suite (`test-userspace`):**
+  - Test 1: User segment descriptors & CPL3 configuration verification.
+  - Test 2: User address space creation, higher-half kernel sharing, and lower-half user isolation.
+  - Test 3: ELF64 executable loader validation, header parsing, entry bounds, and invalid ELF rejection.
+  - Test 4: Syscall pointer protection: kernel pointer rejection, null pointer rejection, and overflow bounds guarding.
+  - Test 5: Process lifecycle & simulated user-mode execution via `int 0x80`.
+  - Test 6: Interactive shell parser and command execution verification.
+
+---
+
 ## 📂 EternalFS Read-Only On-Disk Filesystem (Phase 14C)
 
 ### 1. Architecture & Specification (`docs/eternalfs-spec.md`)
@@ -273,7 +313,12 @@ EternalOS/
 .\run.ps1 -Headless
 ```
 
-### 2. Run Phase 14C EternalFS Read-Only Filesystem Tests
+### 2. Run Phase 15 Userspace, Syscalls & Shell Tests
+```powershell
+.\run.ps1 -Headless -Feature test-userspace
+```
+
+### 3. Run Phase 14C EternalFS Read-Only Filesystem Tests
 ```powershell
 .\run.ps1 -Headless -Feature test-eternalfs
 ```
