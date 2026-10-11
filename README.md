@@ -42,30 +42,27 @@ EternalOS/
 │       ├── vm.rs           # Virtual memory foundations, 4-level page table walking, mapping & TLB invalidation
 │       ├── heap.rs         # Kernel heap allocator (`GlobalAlloc`), free-list management, and page table backing
 │       ├── heap_tests.rs   # Phase 4 dynamic allocation test suite
-│       ├── task.rs         # Kernel task abstraction, round-robin scheduler, context switch & preemption support
+│       ├── task.rs         # Kernel task abstraction, scheduler, context switch, blocking/wakeup
 │       ├── task_tests.rs   # Phase 5 cooperative multitasking test suite
-│       └── preempt_tests.rs# Phase 6 hardware timer preemption test suite
+│       ├── preempt_tests.rs# Phase 6 hardware timer preemption test suite
+│       ├── sync.rs         # Phase 7 synchronization primitives: Mutex, Semaphore, WaitQueue, SpinLock
+│       └── sync_tests.rs   # Phase 7 synchronization verification suite
 └── tools/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
 
 ---
 
-## ⏱️ Hardware Timer & Preemptive Scheduling (Phase 6)
+## 🔒 Task Synchronization Primitives (Phase 7)
 
-### 1. Hardware Timer Subsystem
-- **Timer Source:** Intel 8254 Programmable Interval Timer (PIT) configured in Mode 2 (Rate Generator) at 100 Hz (10 ms time-slice quantum).
-- **Interrupt Routing:** Dual 8259 PIC remapped to vectors 32..47 so IRQ0 maps directly to IDT Vector 32 without colliding with CPU exceptions 0..31.
-- **Tick Tracking:** Tracked using an interrupt-safe `AtomicU64` (`TIMER_TICKS`).
-- **End-Of-Interrupt (EOI):** Sent directly to the PIC (`0x20`) on each timer interrupt tick.
-
-### 2. Preemptive Scheduling Mechanism
-- **Interrupt Entry:** Timer IRQ0 enters `timer_interrupt_handler` via vector 32.
-- **Preemption Safety & Handoff:**
-  - Timer handler attempts a non-blocking `compare_exchange` on `SCHEDULER_LOCK`. If the scheduler is not locked, it increments `PREEMPTION_COUNT` and invokes `SCHEDULER.schedule_next()`.
-  - Stacks and callee-saved registers (`r15`, `r14`, `r13`, `r12`, `rbx`, `rbp`, `rsp`, `rip`) are switched, preempting the running task.
-  - Newly spawned tasks bootstrap via `task_entry_trampoline`, which issues `sti` to guarantee interrupts remain enabled during task execution.
-- **Cooperative Compatibility:** `yield_now()` remains supported and cleanly coordinates with timer preemption using `cli`/`sti` boundaries during yield transitions.
+### 1. Primitives & Blocking Mechanics
+- **WaitQueue:** Fixed-capacity circular FIFO queue (`WaitQueue`) managing blocked task IDs.
+- **SpinLock:** Non-blocking raw spinlock (`SpinLock<T>`) used strictly to protect synchronization metadata under interrupt-disabled (`cli`/`sti`) execution.
+- **Mutex:** Blocking kernel mutex (`Mutex<T>`) with strict task ownership semantics (`owner: AtomicU64`), RAII guard (`MutexGuard`), and sleep/wakeup integration with `SCHEDULER`. Contending tasks are placed on the `WaitQueue` and transitioned to `TaskState::Blocked`.
+- **Counting Semaphore:** Permit-tracking semaphore (`Semaphore`) with atomic permit accounting and scheduler-integrated sleeping when permits reach 0.
+- **Scheduler Integration:**
+  - Introduced `TaskState::Blocked` distinct from `Ready`, `Running`, and `Terminated`.
+  - Added `block_current_task()` and `wake_task(id)` ensuring atomic state transitions with respect to timer interrupts and scheduler passes.
 
 ---
 
@@ -76,13 +73,14 @@ EternalOS/
 .\run.ps1 -Headless
 ```
 
-### 2. Run Phase 6 Hardware Timer Preemption Tests
+### 2. Run Phase 7 Task Synchronization Tests
 ```powershell
-.\run.ps1 -Headless -Feature test-preempt
+.\run.ps1 -Headless -Feature test-sync
 ```
 
 ### 3. Run Prior Subsystem Test Suites (Regression Verification)
 ```powershell
+.\run.ps1 -Headless -Feature test-preempt
 .\run.ps1 -Headless -Feature test-task
 .\run.ps1 -Headless -Feature test-heap
 .\run.ps1 -Headless -Feature test-memory

@@ -16,6 +16,9 @@ pub mod mm_tests;
 #[cfg(feature = "test-preempt")]
 pub mod preempt_tests;
 pub mod serial;
+pub mod sync;
+#[cfg(feature = "test-sync")]
+pub mod sync_tests;
 pub mod task;
 #[cfg(feature = "test-task")]
 pub mod task_tests;
@@ -110,6 +113,11 @@ unsafe extern "C" fn kmain() -> ! {
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
     // 10. Test Hooks
+    #[cfg(feature = "test-sync")]
+    {
+        sync_tests::run_phase7_sync_tests();
+    }
+
     #[cfg(feature = "test-preempt")]
     {
         preempt_tests::run_phase6_preemption_tests();

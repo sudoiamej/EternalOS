@@ -16,6 +16,7 @@ pub static PREEMPTION_COUNT: AtomicU64 = AtomicU64::new(0);
 pub enum TaskState {
     Ready,
     Running,
+    Blocked,
     Terminated,
 }
 
@@ -125,6 +126,28 @@ impl Scheduler {
             t.state = TaskState::Terminated;
         }
         self.schedule_next();
+    }
+
+    pub fn block_current(&mut self) {
+        if let Some(ref mut t) = self.tasks[self.current] {
+            t.state = TaskState::Blocked;
+        }
+        self.schedule_next();
+    }
+
+    pub fn unblock(&mut self, task_id: u64) -> bool {
+        for slot in self.tasks.iter_mut() {
+            if let Some(t) = slot {
+                if t.id == task_id {
+                    if t.state == TaskState::Blocked {
+                        t.state = TaskState::Ready;
+                        return true;
+                    }
+                    return false;
+                }
+            }
+        }
+        false
     }
 
     pub fn schedule_next(&mut self) {
@@ -241,6 +264,13 @@ pub unsafe extern "C" fn x86_64_switch_context(prev: *mut Context, next: *const 
     );
 }
 
+pub fn current_task_id() -> u64 {
+    unsafe {
+        #[allow(static_mut_refs)]
+        SCHEDULER.current_task_id()
+    }
+}
+
 pub fn yield_now() {
     // Disable interrupts to avoid preemption while initiating a cooperative yield
     unsafe { asm!("cli", options(nomem, nostack, preserves_flags)) };
@@ -257,6 +287,42 @@ pub fn yield_now() {
     SCHEDULER_LOCK.store(false, Ordering::Release);
 
     unsafe { asm!("sti", options(nomem, nostack, preserves_flags)) };
+}
+
+pub fn block_current_task() {
+    unsafe { asm!("cli", options(nomem, nostack, preserves_flags)) };
+
+    while SCHEDULER_LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
+
+    unsafe {
+        #[allow(static_mut_refs)]
+        SCHEDULER.block_current();
+    }
+
+    SCHEDULER_LOCK.store(false, Ordering::Release);
+
+    unsafe { asm!("sti", options(nomem, nostack, preserves_flags)) };
+}
+
+pub fn wake_task(task_id: u64) -> bool {
+    unsafe { asm!("cli", options(nomem, nostack, preserves_flags)) };
+
+    while SCHEDULER_LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
+
+    let woken = unsafe {
+        #[allow(static_mut_refs)]
+        SCHEDULER.unblock(task_id)
+    };
+
+    SCHEDULER_LOCK.store(false, Ordering::Release);
+
+    unsafe { asm!("sti", options(nomem, nostack, preserves_flags)) };
+
+    woken
 }
 
 pub fn terminate_task() -> ! {
