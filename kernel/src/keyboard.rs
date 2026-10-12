@@ -4,7 +4,7 @@
 //! keycode mapping to `KeyCode`, and translation to ASCII characters.
 
 use core::arch::asm;
-use crate::input::{post_event, push_char, InputEvent, KeyCode, Modifiers};
+use crate::input::{post_event, InputEvent, KeyCode, Modifiers};
 use crate::sync::SpinLock;
 use crate::timer::{send_eoi_irq, unmask_irq};
 
@@ -439,9 +439,5 @@ pub fn process_keyboard_byte(byte: u8) {
     let mut decoder = KEYBOARD_DECODER.lock();
     if let Some(event) = decoder.process_byte(byte) {
         post_event(event);
-
-        if let InputEvent::KeyDown { ascii: Some(ch), .. } = event {
-            push_char(ch);
-        }
     }
 }

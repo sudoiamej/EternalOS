@@ -351,8 +351,15 @@ impl E1000Driver {
             self.write_reg(REG_TDH, 0);
             self.write_reg(REG_TDT, 0);
 
-            // Enable Receiver
-            let rctl = RCTL_EN | RCTL_BAM | RCTL_BSIZE_2048 | RCTL_SECRC | RCTL_UPE | RCTL_MPE;
+            // Program Receive Address (RAL0/RAH0) with our hardware MAC and Address Valid (AV) bit (bit 31)
+            let mac = self.mac.0;
+            let ral = (mac[0] as u32) | ((mac[1] as u32) << 8) | ((mac[2] as u32) << 16) | ((mac[3] as u32) << 24);
+            let rah = (mac[4] as u32) | ((mac[5] as u32) << 8) | (1 << 31); // 0x80000000 = Address Valid
+            self.write_reg(REG_RAL0, ral);
+            self.write_reg(REG_RAH0, rah);
+
+            // Enable Receiver: Broadcast Accept + Strip CRC (Unicast filtered by RAL0/RAH0)
+            let rctl = RCTL_EN | RCTL_BAM | RCTL_BSIZE_2048 | RCTL_SECRC;
             self.write_reg(REG_RCTL, rctl);
 
             // Enable Transmitter

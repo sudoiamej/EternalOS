@@ -613,15 +613,9 @@ pub fn console_read_byte() -> Option<u8> {
 
 /// Unified console input reading: checks keyboard events first, then UART COM1
 pub fn console_read_input() -> Option<ConsoleKey> {
-    // 0. Synchronously poll PS/2 data port 0x60 in case IRQ1 was masked or delayed
-    crate::keyboard::poll_data();
-
     // 1. Check structured input event queue from PS/2 keyboard IRQ1
     while let Some(ev) = poll_event() {
         if let InputEvent::KeyDown { key, modifiers, ascii } = ev {
-            // Drain mirrored characters in CHAR_QUEUE for this keystroke
-            while pop_char().is_some() {}
-
             // Check for Ctrl combination first
             if modifiers.ctrl {
                 let ctrl_char = match key {

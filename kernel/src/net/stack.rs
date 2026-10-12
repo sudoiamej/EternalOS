@@ -84,30 +84,35 @@ impl NetworkStack {
 
     /// Send an ICMP Echo Request (Ping)
     pub fn send_icmp_ping(&mut self, target_ip: Ipv4Address, seq: u16) -> Result<(), &'static str> {
-        let dst_mac = match self.resolve_mac(target_ip) {
+        let nexthop_ip = if target_ip.is_broadcast() {
+            return Err("Cannot ping broadcast address");
+        } else if self.config.ip.is_same_subnet(&target_ip, &self.config.subnet_mask) {
+            target_ip
+        } else {
+            self.config.gateway
+        };
+
+        let dst_mac = match self.arp_cache.lookup(nexthop_ip) {
             Some(m) => m,
             None => {
-                // Sent ARP request, give backend up to 500ms (50 ticks) to reply
+                // Transmit real ARP request broadcast for nexthop IP
+                self.send_arp_request(nexthop_ip)?;
+
+                // Await genuine ARP reply from hardware
                 let start = crate::timer::get_ticks();
                 let mut resolved = None;
                 while crate::timer::get_ticks().saturating_sub(start) < 50 {
                     let _ = self.poll();
-                    if let Some(m) = self.arp_cache.lookup(if target_ip.is_same_subnet(&self.config.ip, &self.config.subnet_mask) { target_ip } else { self.config.gateway }) {
+                    if let Some(m) = self.arp_cache.lookup(nexthop_ip) {
                         resolved = Some(m);
                         break;
                     }
                     core::hint::spin_loop();
                 }
 
-                // If still not resolved in quick poll, fallback to known QEMU default gateway MAC (52:54:00:12:34:02)
                 match resolved {
                     Some(m) => m,
-                    None => {
-                        // In QEMU slirp, gateway MAC is 52:54:00:12:34:02
-                        let default_gw_mac = EthernetAddress::new(0x52, 0x54, 0x00, 0x12, 0x34, 0x02);
-                        self.arp_cache.insert(self.config.gateway, default_gw_mac, crate::timer::get_ticks());
-                        default_gw_mac
-                    }
+                    None => return Err("Destination host unreachable (ARP resolution failed)"),
                 }
             }
         };
@@ -577,10 +582,16 @@ impl NetworkStack {
                             continue;
                         }
 
+                        // Prevent processing or replying to our own packets
+                        if eth.src == self.config.mac || ip_hdr.src == self.config.ip {
+                            continue;
+                        }
+
                         match ip_hdr.protocol {
                             ip_proto::ICMP => {
                                 if let Ok((icmp_hdr, icmp_payload)) = IcmpHeader::parse(ip_payload) {
-                                    if icmp_hdr.msg_type == ICMP_TYPE_ECHO_REQUEST {
+                                    // Only reply to unicast Echo Requests addressed directly to our IP
+                                    if icmp_hdr.msg_type == ICMP_TYPE_ECHO_REQUEST && ip_hdr.dst == self.config.ip {
                                         // Generate and send Echo Reply
                                         let reply_icmp = IcmpHeader::new_echo_reply(icmp_hdr.id, icmp_hdr.sequence);
                                         let mut resp_icmp_buf = [0u8; 512];
