@@ -153,11 +153,43 @@ EternalOS/
 - **Interactive Network Commands in CLI (`shell.rs`):**
   - `enet`: Display active network device status, link state, hardware MAC, RX/TX packet counts, and byte counters.
   - `ip`: Display or inspect current IPv4 configuration (IP, subnet mask, gateway, DNS server).
+  - `dhcp`: Acquire dynamic IP address configuration via RFC 2131/2132 DHCPDISCOVER/DHCPREQUEST broadcast and commit leased IP, subnet mask, gateway, and DNS server.
   - `ping <ip>`: Send ICMP Echo Request packets and report round-trip reply status.
   - `dns <domain>`: Send a live DNS lookup query to the configured DNS server and display resolved IPv4 address.
+  - `tcp <ip> <port>`: Perform live TCP 3-way handshake (`SYN` -> `SYN-ACK` -> `ACK`), establish socket state, and send clean RST teardown to target host.
 - **Deterministic Automated Test Suite (`test-net`):**
   - Run via: `powershell -ExecutionPolicy Bypass -File .\run.ps1 -Headless -Feature test-net`
-  - Validates wire framing, ARP cache replacement, IPv4 checksums, ICMP echo serialization, UDP checksum calculation, TCP state progression, DNS A-record response parsing, and real hardware E1000 DMA packet transmission.
+  - Validates wire framing, ARP cache replacement, IPv4 checksums, ICMP echo serialization, UDP checksum calculation, TCP state progression, DNS A-record response parsing, DHCP packet serialization, and real hardware E1000 DMA packet transmission.
+
+---
+
+## 🔌 USB Subsystem & UHCI Device Enumeration (Milestone)
+
+### 1. Architecture & Capabilities
+- **Intel PIIX3 UHCI USB 1.1 Host Controller Driver (`usb/uhci.rs`):**
+  - Discovers UHCI host controllers across PCI bus (Class `0x0C`, Subclass `0x03`, Prog IF `0x00`).
+  - Reads I/O port base register from PCI BAR4 (`0x20` register, bit 0 I/O flag mask).
+  - Configures and initializes 4 KiB page-aligned Frame List (1024 entries) pointing to Queue Heads (QH) and Transfer Descriptors (TD).
+  - Starts controller run loop by clearing halt bit and setting run bit in `USBCMD`.
+  - Performs root hub port detection, debounce delay, and root hub port reset via `PORTSC1` / `PORTSC2` (asserting `PORT_RESET` for 20ms, then clearing).
+  - Detects attached device presence and device speed (`LowSpeed` 1.5 Mbps vs `FullSpeed` 12 Mbps).
+  - Constructs and executes standard USB Control Transfers on Endpoint 0 using SETUP, DATA IN, and STATUS OUT Transfer Descriptors with hardware error retry count.
+- **USB Descriptor Architecture (`usb/descriptor.rs`):**
+  - Provides strict length-bounded parsers for standard USB descriptors:
+    - **Device Descriptor:** 18 bytes (length, descriptor type, USB BCD version, device class/subclass/protocol, max packet size 0, vendor ID, product ID, release BCD, string indices, configurations count).
+    - **Configuration Descriptor:** 9-byte header + total interface descriptors length.
+    - **Interface Descriptor:** 9 bytes (interface number, alternate setting, endpoint count, interface class/subclass/protocol, interface string index).
+    - **Endpoint Descriptor:** 7 bytes (endpoint address, transfer attributes, max packet size, polling interval).
+    - **String Descriptor:** Decodes UTF-16LE characters to bounded ASCII strings.
+- **USB Device Registry & CLI Inspection (`usb/device.rs`, `shell.rs`):**
+  - Thread-safe `UsbRegistry` tracking controller ID, port number, assigned address, connection speed, device descriptor, and status.
+  - Interactive CLI command `eusb` (alias `lsusb`):
+    - Lists all active host controllers and enumerated USB devices.
+    - Displays Port, Speed (LowSpeed 1.5Mbps / FullSpeed 12Mbps / HighSpeed 480Mbps / SuperSpeed 5Gbps), Vendor ID, Product ID, and Device Class.
+    - `--verbose` flag inspects BCD USB specification version, Endpoint 0 packet size, and total configurations.
+- **Deterministic Automated Test Suite (`test-usb`):**
+  - Run via: `powershell -ExecutionPolicy Bypass -File .\run.ps1 -Headless -Feature test-usb`
+  - Validates setup packet creation, device descriptor parsing, configuration & interface descriptor verification, endpoint descriptor bounds, UTF-16LE string decoding, and device registry operations.
 
 ---
 

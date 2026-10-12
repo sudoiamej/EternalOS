@@ -30,6 +30,7 @@ test-userspace = []
 test-input = []
 test-shell = []
 test-net = []
+test-usb = []
 
 [dependencies]
 limine = "0.5"

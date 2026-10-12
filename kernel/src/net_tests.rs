@@ -35,13 +35,16 @@ pub fn run_net_tests() {
     // 7. DNS Query Construction & Response Parser Tests
     test_dns_wire();
 
-    // 8. Live Network Device & Hardware Connectivity Tests (E1000 + QEMU slirp)
+    // 8. DHCP Client Serialization & Option Tests
+    test_dhcp_wire();
+
+    // 9. Live Network Device & Hardware Connectivity Tests (E1000 + QEMU slirp)
     test_live_network_connectivity();
 
     log_info!("====================================================");
     log_info!("  ALL NETWORKING SUBSYSTEM TESTS PASSED CLEANLY!    ");
     log_info!("====================================================");
-    println!(">>> NET TEST PASS: Ethernet, ARP, IPv4, ICMP, UDP, TCP, DNS & E1000 verified.");
+    println!(">>> NET TEST PASS: Ethernet, ARP, IPv4, ICMP, UDP, TCP, DNS, DHCP & E1000 verified.");
 }
 
 fn test_ethernet_wire() {
@@ -297,8 +300,34 @@ fn test_dns_wire() {
     log_info!("  [PASS] DNS query building and compressed response resolution verified.");
 }
 
+fn test_dhcp_wire() {
+    log_info!("[TEST 8/9] Testing DHCP Discovery & Request Packet Building...");
+
+    let mac = EthernetAddress::new(0x52, 0x54, 0x00, 0x12, 0x34, 0x56);
+    let xid = 0x12345678;
+
+    let mut disc_buf = [0u8; 320];
+    let disc_len = crate::net::dhcp::build_dhcp_discover(mac, xid, &mut disc_buf)
+        .expect("build_dhcp_discover failed");
+    assert!(disc_len >= 300);
+    assert_eq!(disc_buf[0], crate::net::dhcp::DHCP_OP_BOOTREQUEST);
+    assert_eq!(&disc_buf[4..8], &xid.to_be_bytes());
+    assert_eq!(&disc_buf[28..34], &mac.0);
+    assert_eq!(&disc_buf[236..240], &crate::net::dhcp::DHCP_MAGIC_COOKIE);
+
+    let req_ip = Ipv4Address::new(10, 0, 2, 15);
+    let srv_id = Ipv4Address::new(10, 0, 2, 2);
+    let mut req_buf = [0u8; 320];
+    let req_len = crate::net::dhcp::build_dhcp_request(mac, xid, req_ip, srv_id, &mut req_buf)
+        .expect("build_dhcp_request failed");
+    assert!(req_len >= 300);
+    assert_eq!(req_buf[0], crate::net::dhcp::DHCP_OP_BOOTREQUEST);
+
+    log_info!("  [PASS] DHCP discovery and request serialization verified.");
+}
+
 fn test_live_network_connectivity() {
-    log_info!("[TEST 8/8] Testing Live Network Device & Hardware Connectivity (E1000)...");
+    log_info!("[TEST 9/9] Testing Live Network Device & Hardware Connectivity (E1000)...");
 
     let has_device = crate::net::with_network_stack(|stack| stack.device.is_some());
     assert!(has_device, "Intel E1000 NIC must be detected and initialized on PCI bus");

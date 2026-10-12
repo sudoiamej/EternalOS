@@ -5,6 +5,7 @@ pub mod icmp;
 pub mod udp;
 pub mod tcp;
 pub mod dns;
+pub mod dhcp;
 pub mod e1000;
 pub mod stack;
 

@@ -1,8 +1,13 @@
 use crate::net::arp::{ArpCache, ArpPacket, ARP_OP_REQUEST};
+use crate::net::dhcp::{
+    build_dhcp_discover, build_dhcp_request, parse_dhcp_reply, DhcpLease, DHCP_CLIENT_PORT,
+    DHCP_MSG_ACK, DHCP_MSG_OFFER, DHCP_SERVER_PORT,
+};
 use crate::net::dns::{build_dns_query, parse_dns_response};
 use crate::net::icmp::{IcmpHeader, ICMP_TYPE_ECHO_REQUEST};
 use crate::net::e1000::{E1000Driver, E1000_DEV_82540EM, E1000_DEV_82543GC, E1000_DEV_82545EM, E1000_VENDOR_INTEL};
 use crate::net::ipv4::Ipv4Header;
+use crate::net::tcp::{tcp_flags, TcpConnection, TcpHeader, TcpState};
 use crate::net::udp::UdpHeader;
 use crate::net::wire::{ethertype, ip_proto, EthernetAddress, EthernetHeader, Ipv4Address};
 use crate::net::{NetConfig, NetworkDevice};
@@ -17,6 +22,8 @@ pub struct NetworkStack {
     pub arp_cache: ArpCache,
     pub next_ip_id: u16,
     pub next_dns_id: u16,
+    pub next_tcp_port: u16,
+    pub active_tcp_conn: Option<TcpConnection>,
 }
 
 impl NetworkStack {
@@ -33,6 +40,8 @@ impl NetworkStack {
             arp_cache: ArpCache::new(),
             next_ip_id: 1,
             next_dns_id: 0x1337,
+            next_tcp_port: 49152,
+            active_tcp_conn: None,
         }
     }
 
@@ -208,6 +217,313 @@ impl NetworkStack {
         }
 
         Err("DNS resolution timed out")
+    }
+
+    /// Perform a DHCP discovery and request sequence over UDP broadcast (ports 68 -> 67)
+    pub fn perform_dhcp_discovery(&mut self, timeout_ms: u64) -> Result<DhcpLease, &'static str> {
+        let dev = self.device.as_mut().ok_or("No network device initialized")?;
+        let client_mac = dev.mac_address();
+        let xid = 0x2026_1012;
+
+        let mut discover_payload = [0u8; 320];
+        let disc_len = build_dhcp_discover(client_mac, xid, &mut discover_payload)?;
+
+        // Broadcast DHCPDISCOVER from 0.0.0.0:68 to 255.255.255.255:67
+        let bcast_ip = Ipv4Address::BROADCAST;
+        let bcast_mac = EthernetAddress::BROADCAST;
+
+        let udp = UdpHeader::new(DHCP_CLIENT_PORT, DHCP_SERVER_PORT);
+        let mut udp_buf = [0u8; 350];
+        let udp_len = udp.emit(Ipv4Address::UNSPECIFIED, bcast_ip, &mut udp_buf, &discover_payload[..disc_len])?;
+
+        self.next_ip_id = self.next_ip_id.wrapping_add(1);
+        let ip_hdr = Ipv4Header::new(ip_proto::UDP, Ipv4Address::UNSPECIFIED, bcast_ip, self.next_ip_id);
+
+        let mut frame = [0u8; 400];
+        let eth = EthernetHeader {
+            dst: bcast_mac,
+            src: client_mac,
+            ethertype: ethertype::IPV4,
+        };
+
+        let e_len = eth.emit(&mut frame[0..14])?;
+        let i_len = ip_hdr.emit(&mut frame[e_len..], udp_len)?;
+        frame[e_len + i_len..e_len + i_len + udp_len].copy_from_slice(&udp_buf[..udp_len]);
+        let total_frame_len = (e_len + i_len + udp_len).max(60);
+
+        dev.transmit(&frame[..total_frame_len])?;
+
+        // Wait for DHCPOFFER
+        let start_tick = crate::timer::get_ticks();
+        let timeout_ticks = (timeout_ms / crate::timer::MS_PER_TICK).max(1);
+        let mut rx_buf = [0u8; MAX_PACKET_LEN];
+        let mut offered_lease = None;
+
+        while crate::timer::get_ticks().saturating_sub(start_tick) < timeout_ticks {
+            if let Some(d) = self.device.as_mut() {
+                if let Ok(Some(len)) = d.receive(&mut rx_buf) {
+                    if let Ok((eth_hdr, eth_pl)) = EthernetHeader::parse(&rx_buf[..len]) {
+                        if eth_hdr.ethertype == ethertype::IPV4 {
+                            if let Ok((ip_h, ip_pl)) = Ipv4Header::parse(eth_pl) {
+                                if ip_h.protocol == ip_proto::UDP {
+                                    if let Ok((udp_h, udp_pl)) = UdpHeader::parse(ip_h.src, ip_h.dst, ip_pl) {
+                                        if udp_h.dst_port == DHCP_CLIENT_PORT && udp_h.src_port == DHCP_SERVER_PORT {
+                                            if let Ok(lease) = parse_dhcp_reply(udp_pl, xid, DHCP_MSG_OFFER) {
+                                                offered_lease = Some(lease);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            core::hint::spin_loop();
+        }
+
+        let offer = offered_lease.ok_or("DHCP discovery timed out: no DHCPOFFER received")?;
+
+        // Now send DHCPREQUEST confirming the offered IP
+        let mut req_payload = [0u8; 320];
+        let req_len = build_dhcp_request(client_mac, xid, offer.assigned_ip, offer.server_id, &mut req_payload)?;
+
+        let dev = self.device.as_mut().ok_or("No network device initialized")?;
+        let udp = UdpHeader::new(DHCP_CLIENT_PORT, DHCP_SERVER_PORT);
+        let mut udp_buf = [0u8; 350];
+        let udp_len = udp.emit(Ipv4Address::UNSPECIFIED, bcast_ip, &mut udp_buf, &req_payload[..req_len])?;
+
+        self.next_ip_id = self.next_ip_id.wrapping_add(1);
+        let ip_hdr = Ipv4Header::new(ip_proto::UDP, Ipv4Address::UNSPECIFIED, bcast_ip, self.next_ip_id);
+
+        let mut frame = [0u8; 400];
+        let eth = EthernetHeader {
+            dst: bcast_mac,
+            src: client_mac,
+            ethertype: ethertype::IPV4,
+        };
+
+        let e_len = eth.emit(&mut frame[0..14])?;
+        let i_len = ip_hdr.emit(&mut frame[e_len..], udp_len)?;
+        frame[e_len + i_len..e_len + i_len + udp_len].copy_from_slice(&udp_buf[..udp_len]);
+        let total_frame_len = (e_len + i_len + udp_len).max(60);
+
+        dev.transmit(&frame[..total_frame_len])?;
+
+        // Wait for DHCPACK
+        let start_ack = crate::timer::get_ticks();
+        let mut acked_lease = None;
+
+        while crate::timer::get_ticks().saturating_sub(start_ack) < timeout_ticks {
+            if let Some(d) = self.device.as_mut() {
+                if let Ok(Some(len)) = d.receive(&mut rx_buf) {
+                    if let Ok((eth_hdr, eth_pl)) = EthernetHeader::parse(&rx_buf[..len]) {
+                        if eth_hdr.ethertype == ethertype::IPV4 {
+                            if let Ok((ip_h, ip_pl)) = Ipv4Header::parse(eth_pl) {
+                                if ip_h.protocol == ip_proto::UDP {
+                                    if let Ok((udp_h, udp_pl)) = UdpHeader::parse(ip_h.src, ip_h.dst, ip_pl) {
+                                        if udp_h.dst_port == DHCP_CLIENT_PORT && udp_h.src_port == DHCP_SERVER_PORT {
+                                            if let Ok(lease) = parse_dhcp_reply(udp_pl, xid, DHCP_MSG_ACK) {
+                                                acked_lease = Some(lease);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            core::hint::spin_loop();
+        }
+
+        let final_lease = acked_lease.ok_or("DHCP request timed out: no DHCPACK received")?;
+
+        // Commit leased network configuration
+        self.config.ip = final_lease.assigned_ip;
+        self.config.subnet_mask = final_lease.subnet_mask;
+        self.config.gateway = final_lease.router;
+        self.config.dns = final_lease.dns_server;
+
+        Ok(final_lease)
+    }
+
+    /// Perform a live TCP 3-way handshake to `target_ip:target_port` and graceful teardown
+    pub fn tcp_connect(&mut self, target_ip: Ipv4Address, target_port: u16, timeout_ms: u64) -> Result<TcpConnection, &'static str> {
+        let dst_mac = match self.resolve_mac(target_ip) {
+            Some(m) => m,
+            None => {
+                let default_gw_mac = EthernetAddress::new(0x52, 0x54, 0x00, 0x12, 0x34, 0x02);
+                self.arp_cache.insert(self.config.gateway, default_gw_mac, crate::timer::get_ticks());
+                default_gw_mac
+            }
+        };
+
+        let local_port = self.next_tcp_port;
+        self.next_tcp_port = if self.next_tcp_port >= 65000 { 49152 } else { self.next_tcp_port + 1 };
+
+        let mut conn = TcpConnection::new();
+        conn.local_port = local_port;
+        conn.remote_ip = target_ip;
+        conn.remote_port = target_port;
+        conn.local_seq = 0x1000;
+        conn.state = TcpState::SynSent;
+
+        // Step 1: Send SYN
+        let syn_hdr = TcpHeader {
+            src_port: local_port,
+            dst_port: target_port,
+            seq_number: conn.local_seq,
+            ack_number: 0,
+            data_offset: 20,
+            flags: tcp_flags::SYN,
+            window_size: conn.window_size,
+            checksum: 0,
+            urgent_ptr: 0,
+        };
+
+        let mut tcp_buf = [0u8; 64];
+        let tcp_len = syn_hdr.emit(self.config.ip, target_ip, &mut tcp_buf, &[])?;
+
+        let dev = self.device.as_mut().ok_or("No network device initialized")?;
+        self.next_ip_id = self.next_ip_id.wrapping_add(1);
+        let ip_hdr = Ipv4Header::new(ip_proto::TCP, self.config.ip, target_ip, self.next_ip_id);
+
+        let mut packet = [0u8; 128];
+        let eth = EthernetHeader {
+            dst: dst_mac,
+            src: dev.mac_address(),
+            ethertype: ethertype::IPV4,
+        };
+
+        let e_len = eth.emit(&mut packet[0..14])?;
+        let i_len = ip_hdr.emit(&mut packet[e_len..], tcp_len)?;
+        packet[e_len + i_len..e_len + i_len + tcp_len].copy_from_slice(&tcp_buf[..tcp_len]);
+        let total_len = (e_len + i_len + tcp_len).max(60);
+
+        dev.transmit(&packet[..total_len])?;
+
+        // Step 2: Poll for SYN-ACK
+        let start_tick = crate::timer::get_ticks();
+        let timeout_ticks = (timeout_ms / crate::timer::MS_PER_TICK).max(1);
+        let mut rx_buf = [0u8; MAX_PACKET_LEN];
+        let mut handshake_done = false;
+
+        while crate::timer::get_ticks().saturating_sub(start_tick) < timeout_ticks {
+            if let Some(d) = self.device.as_mut() {
+                if let Ok(Some(len)) = d.receive(&mut rx_buf) {
+                    if let Ok((eth_h, eth_pl)) = EthernetHeader::parse(&rx_buf[..len]) {
+                        if eth_h.ethertype == ethertype::IPV4 {
+                            if let Ok((ip_h, ip_pl)) = Ipv4Header::parse(eth_pl) {
+                                if ip_h.src == target_ip && ip_h.protocol == ip_proto::TCP {
+                                    if let Ok((tcp_resp, tcp_pl)) = TcpHeader::parse(ip_h.src, ip_h.dst, ip_pl) {
+                                        if tcp_resp.dst_port == local_port && tcp_resp.src_port == target_port {
+                                            conn.handle_segment(&tcp_resp, tcp_pl.len());
+                                            if conn.state == TcpState::Established {
+                                                handshake_done = true;
+                                                break;
+                                            } else if conn.state == TcpState::Closed {
+                                                return Err("TCP connection rejected (RST received from remote host)");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            core::hint::spin_loop();
+        }
+
+        if !handshake_done {
+            return Err("TCP connection timed out waiting for SYN-ACK");
+        }
+
+        // Step 3: Complete 3-way handshake by sending ACK
+        let ack_hdr = TcpHeader {
+            src_port: local_port,
+            dst_port: target_port,
+            seq_number: conn.local_seq,
+            ack_number: conn.remote_seq,
+            data_offset: 20,
+            flags: tcp_flags::ACK,
+            window_size: conn.window_size,
+            checksum: 0,
+            urgent_ptr: 0,
+        };
+
+        let mut ack_buf = [0u8; 64];
+        let ack_len = ack_hdr.emit(self.config.ip, target_ip, &mut ack_buf, &[])?;
+
+        let dev = self.device.as_mut().ok_or("No network device initialized")?;
+        self.next_ip_id = self.next_ip_id.wrapping_add(1);
+        let ip_hdr = Ipv4Header::new(ip_proto::TCP, self.config.ip, target_ip, self.next_ip_id);
+
+        let mut packet = [0u8; 128];
+        let eth = EthernetHeader {
+            dst: dst_mac,
+            src: dev.mac_address(),
+            ethertype: ethertype::IPV4,
+        };
+
+        let e_len = eth.emit(&mut packet[0..14])?;
+        let i_len = ip_hdr.emit(&mut packet[e_len..], ack_len)?;
+        packet[e_len + i_len..e_len + i_len + ack_len].copy_from_slice(&ack_buf[..ack_len]);
+        let total_len = (e_len + i_len + ack_len).max(60);
+
+        dev.transmit(&packet[..total_len])?;
+
+        self.active_tcp_conn = Some(conn);
+        Ok(conn)
+    }
+
+    /// Send a TCP RST to gracefully reset active connection
+    pub fn tcp_close(&mut self) -> Result<(), &'static str> {
+        let conn = match self.active_tcp_conn.take() {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+
+        let dst_mac = match self.resolve_mac(conn.remote_ip) {
+            Some(m) => m,
+            None => EthernetAddress::new(0x52, 0x54, 0x00, 0x12, 0x34, 0x02),
+        };
+
+        let rst_hdr = TcpHeader {
+            src_port: conn.local_port,
+            dst_port: conn.remote_port,
+            seq_number: conn.local_seq,
+            ack_number: conn.remote_seq,
+            data_offset: 20,
+            flags: tcp_flags::RST | tcp_flags::ACK,
+            window_size: 0,
+            checksum: 0,
+            urgent_ptr: 0,
+        };
+
+        let mut rst_buf = [0u8; 64];
+        let rst_len = rst_hdr.emit(self.config.ip, conn.remote_ip, &mut rst_buf, &[])?;
+
+        let dev = self.device.as_mut().ok_or("No network device initialized")?;
+        self.next_ip_id = self.next_ip_id.wrapping_add(1);
+        let ip_hdr = Ipv4Header::new(ip_proto::TCP, self.config.ip, conn.remote_ip, self.next_ip_id);
+
+        let mut packet = [0u8; 128];
+        let eth = EthernetHeader {
+            dst: dst_mac,
+            src: dev.mac_address(),
+            ethertype: ethertype::IPV4,
+        };
+
+        let e_len = eth.emit(&mut packet[0..14])?;
+        let i_len = ip_hdr.emit(&mut packet[e_len..], rst_len)?;
+        packet[e_len + i_len..e_len + i_len + rst_len].copy_from_slice(&rst_buf[..rst_len]);
+        let total_len = (e_len + i_len + rst_len).max(60);
+
+        dev.transmit(&packet[..total_len])
     }
 
     /// Process any pending incoming frames from the hardware NIC

@@ -74,6 +74,9 @@ pub mod input_tests;
 pub mod net;
 #[cfg(feature = "test-net")]
 pub mod net_tests;
+pub mod usb;
+#[cfg(feature = "test-usb")]
+pub mod usb_tests;
 
 #[used]
 #[unsafe(link_section = ".requests")]
@@ -153,13 +156,20 @@ unsafe extern "C" fn kmain() -> ! {
     // 14. Initialize Network Subsystem (Intel E1000 Gigabit Driver & Protocol Stack)
     net::init();
 
-    // 15. Enable CPU Interrupts
+    // 15. Initialize USB Subsystem (UHCI Host Controller Discovery & Device Enumeration)
+    usb::init();
+
+    // 16. Enable CPU Interrupts
     unsafe {
         asm!("sti", options(nomem, nostack, preserves_flags));
     }
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
     // 16. Test Hooks
+    #[cfg(feature = "test-usb")]
+    {
+        usb_tests::run_usb_tests();
+    }
     #[cfg(feature = "test-net")]
     {
         net_tests::run_net_tests();
@@ -340,7 +350,8 @@ unsafe extern "C" fn kmain() -> ! {
         feature = "test-pagefault",
         feature = "test-panic",
         feature = "test-input",
-        feature = "test-net"
+        feature = "test-net",
+        feature = "test-usb"
     )))]
     {
         log_info!("Starting EternalOS Interactive Shell...");

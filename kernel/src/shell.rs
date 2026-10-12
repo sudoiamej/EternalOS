@@ -275,11 +275,25 @@ pub const COMMAND_REGISTRY: &[CommandDef] = &[
         usage: "enet",
     },
     CommandDef {
+        name: "eusb",
+        aliases: &["lsusb"],
+        category: CommandCategory::Hardware,
+        summary: "List discovered USB host controllers and devices",
+        usage: "eusb [--verbose]",
+    },
+    CommandDef {
         name: "ip",
         aliases: &[],
         category: CommandCategory::Hardware,
         summary: "Display IP address, gateway, and subnet mask",
         usage: "ip",
+    },
+    CommandDef {
+        name: "dhcp",
+        aliases: &[],
+        category: CommandCategory::Hardware,
+        summary: "Acquire IP lease configuration via DHCP",
+        usage: "dhcp",
     },
     CommandDef {
         name: "ping",
@@ -294,6 +308,13 @@ pub const COMMAND_REGISTRY: &[CommandDef] = &[
         category: CommandCategory::Diagnostics,
         summary: "Resolve domain hostname via DNS",
         usage: "dns <hostname>",
+    },
+    CommandDef {
+        name: "tcp",
+        aliases: &["nc"],
+        category: CommandCategory::Diagnostics,
+        summary: "Establish TCP 3-way handshake to remote host",
+        usage: "tcp <ip> <port>",
     },
 
     // --- Diagnostics ---
@@ -430,9 +451,12 @@ pub fn execute_command(line: &str, ctx: &mut ShellContext) -> i32 {
         "edrv" => cmd_edrv(),
         "mouse" => cmd_mouse(),
         "enet" => cmd_enet(),
+        "eusb" => cmd_eusb(&args),
         "ip" => cmd_ip(),
+        "dhcp" => cmd_dhcp(),
         "ping" => cmd_ping(&args),
         "dns" => cmd_dns(&args),
+        "tcp" => cmd_tcp(&args),
 
         "echeck" => cmd_echeck(),
         "elog" => cmd_elog(),
@@ -1481,6 +1505,183 @@ fn cmd_dns(args: &ParsedArgs) -> i32 {
         }
         Err(e) => {
             console_write("dns: resolution failed: ");
+            console_write(e);
+            console_write("\r\n");
+            1
+        }
+    }
+}
+
+fn cmd_eusb(args: &ParsedArgs) -> i32 {
+    let mut verbose = false;
+    for i in 1..args.len() {
+        if let Some(arg) = args.get(i) {
+            if arg == "--verbose" || arg == "-v" {
+                verbose = true;
+            }
+        }
+    }
+    console_write("USB Host Subsystem & Enumerated Devices:\r\n");
+
+    let count = crate::usb::device::with_usb_registry(|reg| reg.count);
+    let mut b = [0u8; 32];
+
+    if count == 0 {
+        console_write("  No active USB devices enumerated.\r\n");
+        console_write("  Host Controller: PIIX3 UHCI USB 1.1 Root Hub (active)\r\n");
+        return 0;
+    }
+
+    console_write("  Discovered Devices: ");
+    console_write(format_u64(count as u64, &mut b));
+    console_write("\r\n\r\n");
+
+    crate::usb::device::with_usb_registry(|reg| {
+        for i in 0..reg.count {
+            let dev = &reg.devices[i];
+            console_write("  Device [");
+            console_write(format_u64(i as u64, &mut b));
+            console_write("]: Controller=");
+            console_write(format_u64(dev.controller_id as u64, &mut b));
+            console_write(" Port=");
+            console_write(format_u64(dev.port_num as u64, &mut b));
+            console_write(" Speed=");
+            match dev.speed {
+                crate::usb::device::UsbSpeed::FullSpeed => console_write("FullSpeed (12Mbps)"),
+                crate::usb::device::UsbSpeed::LowSpeed => console_write("LowSpeed (1.5Mbps)"),
+                crate::usb::device::UsbSpeed::HighSpeed => console_write("HighSpeed (480Mbps)"),
+                crate::usb::device::UsbSpeed::SuperSpeed => console_write("SuperSpeed (5Gbps)"),
+            }
+            console_write("\r\n");
+
+            console_write("    Vendor ID  : 0x");
+            console_write(format_hex_u8((dev.descriptor.id_vendor >> 8) as u8, &mut b));
+            console_write(format_hex_u8(dev.descriptor.id_vendor as u8, &mut b));
+            console_write("  Product ID: 0x");
+            console_write(format_hex_u8((dev.descriptor.id_product >> 8) as u8, &mut b));
+            console_write(format_hex_u8(dev.descriptor.id_product as u8, &mut b));
+            console_write("\r\n");
+
+            console_write("    Class Code : 0x");
+            console_write(format_hex_u8(dev.descriptor.b_device_class, &mut b));
+            console_write(" (SubClass: 0x");
+            console_write(format_hex_u8(dev.descriptor.b_device_subclass, &mut b));
+            console_write(", Proto: 0x");
+            console_write(format_hex_u8(dev.descriptor.b_device_protocol, &mut b));
+            console_write(")\r\n");
+
+            if verbose {
+                console_write("    USB Version: ");
+                let bcd = dev.descriptor.bcd_usb;
+                console_write(format_u64((bcd >> 8) as u64, &mut b));
+                console_write(".");
+                console_write(format_u64((bcd & 0xFF) as u64, &mut b));
+                console_write("  MaxPacket0: ");
+                console_write(format_u64(dev.descriptor.b_max_packet_size0 as u64, &mut b));
+                console_write("B  Configs: ");
+                console_write(format_u64(dev.descriptor.b_num_configurations as u64, &mut b));
+                console_write("\r\n");
+            }
+            console_write("\r\n");
+        }
+    });
+
+    0
+}
+
+fn cmd_dhcp() -> i32 {
+    console_write("Acquiring network configuration lease via DHCP...\r\n");
+    let res = crate::net::with_network_stack(|stack| {
+        stack.perform_dhcp_discovery(4000)
+    });
+
+    match res {
+        Ok(lease) => {
+            let mut b = [0u8; 32];
+            console_write("  [SUCCESS] DHCP Lease Acquired!\r\n");
+            console_write("  Assigned IP : ");
+            print_ipv4(&lease.assigned_ip, &mut b);
+            console_write("\r\n  Subnet Mask : ");
+            print_ipv4(&lease.subnet_mask, &mut b);
+            console_write("\r\n  Gateway     : ");
+            print_ipv4(&lease.router, &mut b);
+            console_write("\r\n  DNS Server  : ");
+            print_ipv4(&lease.dns_server, &mut b);
+            console_write("\r\n  Lease Time  : ");
+            console_write(format_u64(lease.lease_time_secs as u64, &mut b));
+            console_write(" seconds\r\n");
+            0
+        }
+        Err(e) => {
+            console_write("dhcp: lease acquisition failed: ");
+            console_write(e);
+            console_write("\r\n");
+            1
+        }
+    }
+}
+
+fn cmd_tcp(args: &ParsedArgs) -> i32 {
+    if args.len() < 3 {
+        console_write("tcp: missing arguments (usage: tcp <ip> <port>)\r\n");
+        return 1;
+    }
+
+    let ip_str = args.get(1).unwrap_or("");
+    let port_str = args.get(2).unwrap_or("");
+
+    let target_ip = match parse_ipv4(ip_str) {
+        Some(ip) => ip,
+        None => {
+            console_write("tcp: invalid target IPv4 address '");
+            console_write(ip_str);
+            console_write("'\r\n");
+            return 1;
+        }
+    };
+
+    let target_port: u16 = match parse_usize(port_str) {
+        Some(p) if p <= 65535 => p as u16,
+        _ => {
+            console_write("tcp: invalid target port '");
+            console_write(port_str);
+            console_write("'\r\n");
+            return 1;
+        }
+    };
+
+    let mut b = [0u8; 32];
+    console_write("Connecting to ");
+    print_ipv4(&target_ip, &mut b);
+    console_write(":");
+    console_write(format_u64(target_port as u64, &mut b));
+    console_write(" via TCP 3-way handshake...\r\n");
+
+    let res = crate::net::with_network_stack(|stack| {
+        stack.tcp_connect(target_ip, target_port, 4000)
+    });
+
+    match res {
+        Ok(conn) => {
+            console_write("  [SUCCESS] TCP Connection ESTABLISHED!\r\n");
+            console_write("  Local Port : ");
+            console_write(format_u64(conn.local_port as u64, &mut b));
+            console_write("  Remote Port: ");
+            console_write(format_u64(conn.remote_port as u64, &mut b));
+            console_write("\r\n  Local Seq  : 0x");
+            console_write(format_u64(conn.local_seq as u64, &mut b));
+            console_write("  Remote Seq : 0x");
+            console_write(format_u64(conn.remote_seq as u64, &mut b));
+            console_write("\r\nClosing connection...\r\n");
+
+            let _ = crate::net::with_network_stack(|stack| {
+                stack.tcp_close()
+            });
+            console_write("Connection closed.\r\n");
+            0
+        }
+        Err(e) => {
+            console_write("tcp: connection failed: ");
             console_write(e);
             console_write("\r\n");
             1
