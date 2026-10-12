@@ -71,6 +71,9 @@ pub mod keyboard;
 pub mod mouse;
 #[cfg(feature = "test-input")]
 pub mod input_tests;
+pub mod net;
+#[cfg(feature = "test-net")]
+pub mod net_tests;
 
 #[used]
 #[unsafe(link_section = ".requests")]
@@ -147,13 +150,20 @@ unsafe extern "C" fn kmain() -> ! {
     keyboard::init();
     mouse::init();
 
-    // 14. Enable CPU Interrupts
+    // 14. Initialize Network Subsystem (Intel E1000 Gigabit Driver & Protocol Stack)
+    net::init();
+
+    // 15. Enable CPU Interrupts
     unsafe {
         asm!("sti", options(nomem, nostack, preserves_flags));
     }
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
 
-    // 15. Test Hooks
+    // 16. Test Hooks
+    #[cfg(feature = "test-net")]
+    {
+        net_tests::run_net_tests();
+    }
     #[cfg(feature = "test-shell")]
     {
         shell_tests::run_phase_shell_tests();
@@ -329,7 +339,8 @@ unsafe extern "C" fn kmain() -> ! {
         feature = "test-gpf",
         feature = "test-pagefault",
         feature = "test-panic",
-        feature = "test-input"
+        feature = "test-input",
+        feature = "test-net"
     )))]
     {
         log_info!("Starting EternalOS Interactive Shell...");

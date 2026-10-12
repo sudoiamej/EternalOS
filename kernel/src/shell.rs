@@ -1,4 +1,5 @@
 use crate::console::{console_write, console_write_byte};
+use crate::net::NetworkDevice;
 use crate::shell_parser::{parse_command_line, ParsedArgs};
 use crate::vfs::{with_vfs, DirEntry, NodeType, OpenFlags, VfsError};
 
@@ -244,6 +245,34 @@ pub const COMMAND_REGISTRY: &[CommandDef] = &[
         summary: "Display PS/2 mouse coordinate and button state",
         usage: "mouse",
     },
+    CommandDef {
+        name: "enet",
+        aliases: &["ifconfig"],
+        category: CommandCategory::Hardware,
+        summary: "Display network interface status, MAC, and stats",
+        usage: "enet",
+    },
+    CommandDef {
+        name: "ip",
+        aliases: &[],
+        category: CommandCategory::Hardware,
+        summary: "Display IP address, gateway, and subnet mask",
+        usage: "ip",
+    },
+    CommandDef {
+        name: "ping",
+        aliases: &[],
+        category: CommandCategory::Diagnostics,
+        summary: "Send ICMP Echo Request to IPv4 address",
+        usage: "ping <ip>",
+    },
+    CommandDef {
+        name: "dns",
+        aliases: &["nslookup"],
+        category: CommandCategory::Diagnostics,
+        summary: "Resolve domain hostname via DNS",
+        usage: "dns <hostname>",
+    },
 
     // --- Diagnostics ---
     CommandDef {
@@ -375,6 +404,10 @@ pub fn execute_command(line: &str, ctx: &mut ShellContext) -> i32 {
         "epci" => cmd_epci(),
         "edrv" => cmd_edrv(),
         "mouse" => cmd_mouse(),
+        "enet" => cmd_enet(),
+        "ip" => cmd_ip(),
+        "ping" => cmd_ping(&args),
+        "dns" => cmd_dns(&args),
 
         "echeck" => cmd_echeck(),
         "elog" => cmd_elog(),
@@ -1177,6 +1210,13 @@ fn cmd_edrv() -> i32 {
     console_write("  [OK] PS/2 Mouse Driver (IRQ12, 3-Byte Packet Decoder)\r\n");
     console_write("  [OK] VirtIO Block Driver (PCI Modern / Legacy MMIO)\r\n");
     console_write("  [OK] Linear Framebuffer Console (VESA/GOP Direct Scanout)\r\n");
+    crate::net::with_network_stack(|stack| {
+        if stack.device.is_some() {
+            console_write("  [OK] Intel E1000 Gigabit Network Driver (PCI MMIO / Bus Master)\r\n");
+        } else {
+            console_write("  [--] Network Stack (No Hardware Device Present)\r\n");
+        }
+    });
     0
 }
 
@@ -1199,6 +1239,228 @@ fn cmd_mouse() -> i32 {
     console_write(if mb { "DOWN" } else { "UP" });
     console_write("\r\n  Hardware   : IRQ12 / Vector 44 (Streaming Mode)\r\n");
     0
+}
+
+fn cmd_enet() -> i32 {
+    crate::net::with_network_stack(|stack| {
+        console_write("Network Interface [eth0]:\r\n");
+        match stack.device.as_ref() {
+            Some(dev) => {
+                let mac = dev.mac_address();
+                console_write("  Hardware MAC : ");
+                let mut b = [0u8; 32];
+                for (i, byte) in mac.0.iter().enumerate() {
+                    if i > 0 { console_write(":"); }
+                    console_write(format_hex_u8(*byte, &mut b));
+                }
+                console_write("\r\n  Link Status  : ");
+                console_write(if dev.is_link_up() { "UP (1000 Mbps Full-Duplex)" } else { "DOWN" });
+                console_write("\r\n  Driver       : Intel 82540EM Gigabit Ethernet (PCI MMIO)\r\n");
+
+                let stats = dev.stats();
+                console_write("  Packets RX/TX: ");
+                console_write(format_u64(stats.rx_packets, &mut b));
+                console_write(" / ");
+                console_write(format_u64(stats.tx_packets, &mut b));
+                console_write("\r\n  Bytes   RX/TX: ");
+                console_write(format_u64(stats.rx_bytes, &mut b));
+                console_write(" / ");
+                console_write(format_u64(stats.tx_bytes, &mut b));
+                console_write("\r\n  Dropped RX/TX: ");
+                console_write(format_u64(stats.rx_dropped, &mut b));
+                console_write(" / ");
+                console_write(format_u64(stats.tx_dropped, &mut b));
+                console_write("\r\n");
+                0
+            }
+            None => {
+                console_write("  Status: No network interface device detected.\r\n");
+                1
+            }
+        }
+    })
+}
+
+fn cmd_ip() -> i32 {
+    crate::net::with_network_stack(|stack| {
+        console_write("IPv4 Network Configuration [eth0]:\r\n");
+        let mut b = [0u8; 32];
+        console_write("  IPv4 Address : ");
+        print_ipv4(&stack.config.ip, &mut b);
+        console_write("\r\n  Subnet Mask  : ");
+        print_ipv4(&stack.config.subnet_mask, &mut b);
+        console_write("\r\n  Default GW   : ");
+        print_ipv4(&stack.config.gateway, &mut b);
+        console_write("\r\n  DNS Server   : ");
+        print_ipv4(&stack.config.dns, &mut b);
+        console_write("\r\n");
+        0
+    })
+}
+
+fn print_ipv4(ip: &crate::net::wire::Ipv4Address, buf: &mut [u8; 32]) {
+    for (i, octet) in ip.0.iter().enumerate() {
+        if i > 0 { console_write("."); }
+        console_write(format_u64(*octet as u64, buf));
+    }
+}
+
+pub fn format_hex_u8(n: u8, buf: &mut [u8; 32]) -> &str {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    buf[0] = HEX[((n >> 4) & 0xF) as usize];
+    buf[1] = HEX[(n & 0xF) as usize];
+    core::str::from_utf8(&buf[..2]).unwrap_or("00")
+}
+
+fn parse_ipv4(s: &str) -> Option<crate::net::wire::Ipv4Address> {
+    let mut octets = [0u8; 4];
+    let mut count = 0;
+    for part in s.split('.') {
+        if count >= 4 { return None; }
+        let val: u16 = parse_usize(part)? as u16;
+        if val > 255 { return None; }
+        octets[count] = val as u8;
+        count += 1;
+    }
+    if count == 4 {
+        Some(crate::net::wire::Ipv4Address(octets))
+    } else {
+        None
+    }
+}
+
+fn cmd_ping(args: &ParsedArgs) -> i32 {
+    if args.len() < 2 {
+        console_write("ping: missing target IP address (usage: ping <ip>)\r\n");
+        return 1;
+    }
+    let target_str = args.get(1).unwrap_or("");
+    let target_ip = match parse_ipv4(target_str) {
+        Some(ip) => ip,
+        None => {
+            console_write("ping: invalid IPv4 address format '");
+            console_write(target_str);
+            console_write("'\r\n");
+            return 1;
+        }
+    };
+
+    console_write("PING ");
+    console_write(target_str);
+    console_write(" (32 bytes of ICMP Echo payload):\r\n");
+
+    let mut successful = 0;
+    for seq in 1..=4 {
+        let res = crate::net::with_network_stack(|stack| {
+            stack.send_icmp_ping(target_ip, seq)
+        });
+
+        match res {
+            Ok(_) => {
+                // Poll for echo reply
+                let start_tick = crate::timer::get_ticks();
+                let mut replied = false;
+                let mut reply_bytes = 0;
+                let mut reply_ttl = 64;
+
+                let mut rx_buf = [0u8; 1536];
+                while crate::timer::get_ticks().saturating_sub(start_tick) < 100 { // 1 second timeout (100 ticks)
+                    let packet = crate::net::with_network_stack(|stack| {
+                        if let Some(dev) = stack.device.as_mut() {
+                            dev.receive(&mut rx_buf).unwrap_or(None)
+                        } else {
+                            None
+                        }
+                    });
+
+                    if let Some(len) = packet {
+                        if let Ok((eth, p1)) = crate::net::wire::EthernetHeader::parse(&rx_buf[..len]) {
+                            if eth.ethertype == crate::net::wire::ethertype::IPV4 {
+                                if let Ok((ip_hdr, p2)) = crate::net::ipv4::Ipv4Header::parse(p1) {
+                                    if ip_hdr.src == target_ip && ip_hdr.protocol == crate::net::wire::ip_proto::ICMP {
+                                        if let Ok((icmp_hdr, _p3)) = crate::net::icmp::IcmpHeader::parse(p2) {
+                                            if icmp_hdr.msg_type == crate::net::icmp::ICMP_TYPE_ECHO_REPLY && icmp_hdr.sequence == seq {
+                                                replied = true;
+                                                reply_bytes = p2.len();
+                                                reply_ttl = ip_hdr.ttl;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    core::hint::spin_loop();
+                }
+
+                if replied {
+                    successful += 1;
+                    let elapsed_ms = (crate::timer::get_ticks().saturating_sub(start_tick)) * crate::timer::MS_PER_TICK;
+                    let mut b = [0u8; 32];
+                    console_write("  Reply from ");
+                    console_write(target_str);
+                    console_write(": bytes=");
+                    console_write(format_u64(reply_bytes as u64, &mut b));
+                    console_write(" time<=");
+                    console_write(format_u64(elapsed_ms.max(1), &mut b));
+                    console_write("ms TTL=");
+                    console_write(format_u64(reply_ttl as u64, &mut b));
+                    console_write("\r\n");
+                } else {
+                    console_write("  Request timed out (seq=");
+                    let mut b = [0u8; 32];
+                    console_write(format_u64(seq as u64, &mut b));
+                    console_write(").\r\n");
+                }
+            }
+            Err(e) => {
+                console_write("ping: transmit failed: ");
+                console_write(e);
+                console_write("\r\n");
+            }
+        }
+    }
+
+    console_write("--- ");
+    console_write(target_str);
+    console_write(" ping statistics ---\r\n  4 packets transmitted, ");
+    let mut b = [0u8; 32];
+    console_write(format_u64(successful as u64, &mut b));
+    console_write(" received\r\n");
+
+    if successful > 0 { 0 } else { 1 }
+}
+
+fn cmd_dns(args: &ParsedArgs) -> i32 {
+    if args.len() < 2 {
+        console_write("dns: missing domain hostname (usage: dns <hostname>)\r\n");
+        return 1;
+    }
+    let hostname = args.get(1).unwrap_or("");
+    console_write("Resolving hostname '");
+    console_write(hostname);
+    console_write("' via DNS...\r\n");
+
+    let res = crate::net::with_network_stack(|stack| {
+        stack.resolve_dns(hostname, 3000) // 3000 ms timeout
+    });
+
+    match res {
+        Ok(ip) => {
+            let mut b = [0u8; 32];
+            console_write("  Address: ");
+            print_ipv4(&ip, &mut b);
+            console_write("\r\n");
+            0
+        }
+        Err(e) => {
+            console_write("dns: resolution failed: ");
+            console_write(e);
+            console_write("\r\n");
+            1
+        }
+    }
 }
 
 fn cmd_echeck() -> i32 {

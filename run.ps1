@@ -66,6 +66,8 @@ $qemuArgs = @(
     "-drive", "file=fat:rw:$stageDir,format=raw",
     "-drive", "id=testdisk,file=$testDisk,format=raw,if=none",
     "-device", "virtio-blk-pci,drive=testdisk",
+    "-netdev", "user,id=net0",
+    "-device", "e1000,netdev=net0,mac=52:54:00:12:34:56",
     "-serial", "stdio",
     "-no-reboot"
 )

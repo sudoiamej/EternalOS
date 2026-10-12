@@ -29,6 +29,7 @@ test-eternalfs = []
 test-userspace = []
 test-input = []
 test-shell = []
+test-net = []
 
 [dependencies]
 limine = "0.5"

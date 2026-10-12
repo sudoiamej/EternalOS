@@ -100,6 +100,38 @@ EternalOS/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
 
+## 🌐 Modular Networking Stack & Intel E1000 Driver (Milestone)
+
+### 1. Architecture & Capabilities
+- **Intel 82540EM (E1000) Gigabit Ethernet Driver (`net/e1000.rs`):**
+  - PCI device discovery via Vendor `0x8086`, Device `0x100E`.
+  - Dynamic page table mapping for physical MMIO BAR0 (128 KiB memory-mapped control registers with `PAGE_WRITABLE | PAGE_NO_CACHE`).
+  - Hardware reset & link status negotiation (`CTRL`, `STATUS`).
+  - Hardware MAC address auto-discovery from EEPROM / RAL0/RAH0 registers.
+  - Ring buffer circular DMA:
+    - 32 Receive descriptors (`E1000RxDesc`) with circular head/tail tracking (`RDBAL`, `RDLEN`, `RDH`, `RDT`).
+    - 32 Transmit descriptors (`E1000TxDesc`) with circular head/tail tracking (`TDBAL`, `TDLEN`, `TDH`, `TDT`).
+    - End-of-Packet (`EOP`) and Insert-Checksum/Report-Status (`RS | IFCS`) descriptor flags.
+    - Zero unbounded memory allocation: statically bounded ring DMA storage pool (`E1000DmaPool`).
+- **Zero-Allocation Protocol Stack (`net/wire.rs`, `net/stack.rs`):**
+  - **Ethernet II:** 14-byte frame header parser/serializer with big-endian byte-order validation.
+  - **ARP:** RFC 826 ARP Request and Reply engine with a bounded 16-entry LRU cache (`ArpCache`).
+  - **IPv4:** RFC 791 packet parsing and generation with standard 16-bit One's Complement internet checksum calculation and validation.
+  - **ICMP:** RFC 792 Echo Request and Echo Reply engine. Auto-responds to incoming ping requests and generates outbound pings.
+  - **UDP:** RFC 768 datagram processing with IPv4 pseudo-header checksum generation.
+  - **TCP:** RFC 793 packet framing, checksum calculation, TCP flags (`SYN`, `ACK`, `FIN`, `RST`, `PSH`), and connection state machine foundation (`TcpState`).
+  - **DNS:** RFC 1035 UDP client generating DNS queries on port 53, standard label-length encoding, and response parser resolving IPv4 `A` records (including compressed name pointers).
+- **Interactive Network Commands in CLI (`shell.rs`):**
+  - `enet`: Display active network device status, link state, hardware MAC, RX/TX packet counts, and byte counters.
+  - `ip`: Display or inspect current IPv4 configuration (IP, subnet mask, gateway, DNS server).
+  - `ping <ip>`: Send ICMP Echo Request packets and report round-trip reply status.
+  - `dns <domain>`: Send a live DNS lookup query to the configured DNS server and display resolved IPv4 address.
+- **Deterministic Automated Test Suite (`test-net`):**
+  - Run via: `powershell -ExecutionPolicy Bypass -File .\run.ps1 -Headless -Feature test-net`
+  - Validates wire framing, ARP cache replacement, IPv4 checksums, ICMP echo serialization, UDP checksum calculation, TCP state progression, DNS A-record response parsing, and real hardware E1000 DMA packet transmission.
+
+---
+
 ## 🐚 Userspace, Process Execution & Command-Line Shell (Phase 15)
 
 ### 1. Architecture & Capabilities
