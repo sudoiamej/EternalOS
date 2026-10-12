@@ -11,6 +11,8 @@ EternalOS is an x86-64 operating system built from scratch with a Rust-first hyb
 - **Toolchain:** Rust Nightly (`x86_64-unknown-none`) + LLD Linker
 - **Primary Host Environment:** Native Windows 11
 - **Emulation & Verification:** QEMU Virtual Machine (`q35` with OVMF UEFI)
+- **Visual Identity:** Eternal Purple theme (`#7C3AED`, `#6D28D9`, `#A78BFA`) with white logo
+- **Graphics & Input Pipeline:** Direct PS/2 input routing with synchronous fallback, glowing boot splash with truthful progress milestones, and flicker-free terminal row-buffer rendering.
 
 ---
 

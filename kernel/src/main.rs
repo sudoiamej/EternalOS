@@ -37,6 +37,7 @@ pub mod framebuffer;
 #[cfg(feature = "test-graphics")]
 pub mod graphics_tests;
 pub mod logo_asset;
+pub mod splash;
 pub mod pci;
 #[cfg(feature = "test-pci")]
 pub mod pci_tests;
@@ -132,20 +133,23 @@ unsafe extern "C" fn kmain() -> ! {
         log_error!("Failed to initialize Kernel Heap: {}", e);
     }
 
-    // 7. Initialize Framebuffer & Render Graphical Boot Screen
+    // 7. Initialize Framebuffer & Boot Splash
     framebuffer::init();
+    splash::update_stage(splash::BootStage::CoreMemory, Some("Memory Paging & Frame Allocator Active (15%)"));
 
     // 8. Initialize Kernel Tasking Subsystem
     task::init_tasking();
 
     // 9. Discover PCI/PCIe Hardware & Enumerate Buses (Mechanism #1)
     pci::init();
+    splash::update_stage(splash::BootStage::TaskingAndPci, Some("Tasking & PCI Hardware Enumerated (35%)"));
 
     // 10. Initialize Block Storage (VirtIO Block Driver)
     virtio_blk::init();
 
     // 11. Initialize Virtual Filesystem (VFS) with root RamFs
     vfs::init();
+    splash::update_stage(splash::BootStage::StorageAndVfs, Some("VirtIO Block Storage & VFS Mounted (55%)"));
 
     // 12. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
     timer::init_pit(100);
@@ -154,17 +158,19 @@ unsafe extern "C" fn kmain() -> ! {
     keyboard::init();
     mouse::init();
 
-    // 14. Initialize Network Subsystem (Intel E1000 Gigabit Driver & Protocol Stack)
-    net::init();
-
-    // 15. Initialize USB Subsystem (UHCI Host Controller Discovery & Device Enumeration)
-    usb::init();
-
-    // 16. Enable CPU Interrupts
+    // 14. Enable CPU Interrupts on Bootstrap Processor (allows PIT ticks and PS/2 IRQs)
     unsafe {
         asm!("sti", options(nomem, nostack, preserves_flags));
     }
     log_info!("Hardware interrupts enabled on Bootstrap Processor (STI).");
+    splash::update_stage(splash::BootStage::TimerAndInput, Some("Hardware Timer & PS/2 Input Online (75%)"));
+
+    // 15. Initialize Network Subsystem (Intel E1000 Gigabit Driver & Protocol Stack)
+    net::init();
+
+    // 16. Initialize USB Subsystem (UHCI Host Controller Discovery & Device Enumeration)
+    usb::init();
+    splash::update_stage(splash::BootStage::NetworkAndUsb, Some("Intel E1000 & USB Controllers Active (90%)"));
 
     // 16. Test Hooks
     #[cfg(feature = "test-usb")]
@@ -355,6 +361,9 @@ unsafe extern "C" fn kmain() -> ! {
         feature = "test-usb"
     )))]
     {
+        // 17. Finish boot splash and transition cleanly to interactive terminal panel
+        splash::finish();
+
         log_info!("Starting EternalOS Interactive Shell...");
         shell::run_interactive_shell();
     }

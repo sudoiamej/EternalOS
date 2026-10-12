@@ -218,14 +218,19 @@ impl Framebuffer {
         self.fill_rect(Rect::new(0, 0, self.width, self.height), color);
     }
 
-    /// Draw a filled rectangle with coordinate clipping
+    /// Draw a filled rectangle with coordinate clipping and row-linear writes
     pub fn fill_rect(&self, rect: Rect, color: Color) {
         let x_start = rect.x.min(self.width);
         let x_end = (rect.x + rect.width).min(self.width);
         let y_start = rect.y.min(self.height);
         let y_end = (rect.y + rect.height).min(self.height);
 
+        if x_start >= x_end || y_start >= y_end {
+            return;
+        }
+
         let pixel_val = self.format.pack_u32(color);
+        let span_len = x_end - x_start;
 
         for y in y_start..y_end {
             let row_offset = match y.checked_mul(self.pitch) {
@@ -233,11 +238,14 @@ impl Framebuffer {
                 None => continue,
             };
 
-            for x in x_start..x_end {
-                let offset = row_offset + (x * 4);
-                if offset + 4 <= self.buffer_len {
-                    unsafe {
-                        write_volatile(self.virt_base.add(offset).cast::<u32>(), pixel_val);
+            let start_offset = row_offset + (x_start * 4);
+            let end_offset = start_offset + (span_len * 4);
+            if end_offset <= self.buffer_len {
+                unsafe {
+                    let mut ptr = self.virt_base.add(start_offset).cast::<u32>();
+                    for _ in 0..span_len {
+                        write_volatile(ptr, pixel_val);
+                        ptr = ptr.add(1);
                     }
                 }
             }
@@ -274,18 +282,37 @@ impl Framebuffer {
         self.fill_rect(Rect::new(x, y, 1, height), color);
     }
 
-    /// Render a single 8x16 ASCII character glyph
+    /// Render a single 8x16 ASCII character glyph with row-stride fast write
     pub fn draw_char(&self, x: usize, y: usize, c: char, fg: Color, bg: Option<Color>) {
+        if x + 8 > self.width || y + 16 > self.height {
+            return;
+        }
+
         let glyph = crate::font::get_char_glyph(c);
+        let fg_val = self.format.pack_u32(fg);
+        let bg_val = bg.map(|c| self.format.pack_u32(c));
+
         for row in 0..16 {
+            let pixel_y = y + row;
+            let row_offset = match pixel_y.checked_mul(self.pitch) {
+                Some(off) => off,
+                None => continue,
+            };
+            let start_offset = row_offset + (x * 4);
+            if start_offset + 32 > self.buffer_len {
+                continue;
+            }
+
             let byte = glyph[row];
-            for col in 0..8 {
-                let pixel_x = x + col;
-                let pixel_y = y + row;
-                if (byte & (0x80 >> col)) != 0 {
-                    self.put_pixel(pixel_x, pixel_y, fg);
-                } else if let Some(bg_color) = bg {
-                    self.put_pixel(pixel_x, pixel_y, bg_color);
+            unsafe {
+                let mut ptr = self.virt_base.add(start_offset).cast::<u32>();
+                for col in 0..8 {
+                    if (byte & (0x80 >> col)) != 0 {
+                        write_volatile(ptr, fg_val);
+                    } else if let Some(bg_pixel) = bg_val {
+                        write_volatile(ptr, bg_pixel);
+                    }
+                    ptr = ptr.add(1);
                 }
             }
         }
@@ -429,8 +456,8 @@ pub fn init() {
 
     crate::log_info!("[GRAPHICS] Framebuffer initialized successfully.");
 
-    // Render the EternalOS Graphical Boot Screen
-    render_boot_screen();
+    // Initialize EternalOS Boot Splash Screen with glowing logo and progress bar
+    crate::splash::init();
 }
 
 /// Access the global framebuffer under lock

@@ -69,7 +69,7 @@ $qemuArgs = @(
     "-netdev", "user,id=net0",
     "-device", "e1000,netdev=net0,mac=52:54:00:12:34:56",
     "-device", "piix3-usb-uhci,id=uhci0",
-    "-device", "usb-kbd,bus=uhci0.0",
+    "-device", "usb-tablet,bus=uhci0.0",
     "-serial", "stdio",
     "-no-reboot"
 )

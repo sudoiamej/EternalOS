@@ -287,33 +287,34 @@ fn redraw_viewport_locked(fb: &crate::framebuffer::Framebuffer, con: &ConsoleSta
         return;
     }
 
-    let panel_x = 40;
-    let panel_y = 254;
-    let panel_w = fb.width - 80;
-    let content_y = panel_y + 36;
-    let content_h = fb.height - content_y - 52;
-
-    // Clear terminal content area
-    fb.fill_rect(Rect::new(panel_x + 2, content_y, panel_w - 4, content_h), Color::PANEL_BG);
-
     // Update footer bar with scroll state
     render_footer_bar(fb, con.scrollback.scroll_offset);
 
     let offset = con.scrollback.scroll_offset;
     let rows_to_show = TERM_ROWS.min(con.scrollback.count);
 
-    for row in 0..rows_to_show {
-        let from_bottom = (rows_to_show - 1 - row) + offset;
-        if let Some(line) = con.scrollback.get_line_from_bottom(from_bottom) {
-            let draw_y = con.min_y + (row * 18);
-            let mut draw_x = con.min_x;
-
-            for &ch in &line.chars[..line.len] {
-                if ch >= 0x20 && ch <= 0x7E {
-                    fb.draw_char(draw_x, draw_y, ch as char, Color::TEXT_PRIMARY, Some(Color::PANEL_BG));
-                    draw_x += 8;
+    for row in 0..TERM_ROWS {
+        let draw_y = con.min_y + (row * 18);
+        if row < rows_to_show {
+            let from_bottom = (rows_to_show - 1 - row) + offset;
+            if let Some(line) = con.scrollback.get_line_from_bottom(from_bottom) {
+                let mut draw_x = con.min_x;
+                for &ch in &line.chars[..line.len] {
+                    if ch >= 0x20 && ch <= 0x7E {
+                        fb.draw_char(draw_x, draw_y, ch as char, Color::TEXT_PRIMARY, Some(Color::PANEL_BG));
+                        draw_x += 8;
+                    }
                 }
+                // Clear the remainder of this active row to prevent ghost characters
+                if draw_x < con.max_x {
+                    fb.fill_rect(Rect::new(draw_x, draw_y, con.max_x - draw_x, 16), Color::PANEL_BG);
+                }
+            } else {
+                fb.fill_rect(Rect::new(con.min_x, draw_y, con.max_x - con.min_x, 18), Color::PANEL_BG);
             }
+        } else {
+            // Unused row: clear row area
+            fb.fill_rect(Rect::new(con.min_x, draw_y, con.max_x - con.min_x, 18), Color::PANEL_BG);
         }
     }
 }
@@ -448,6 +449,9 @@ pub fn console_read_byte() -> Option<u8> {
 
 /// Unified console input reading: checks keyboard events first, then UART COM1
 pub fn console_read_input() -> Option<ConsoleKey> {
+    // 0. Synchronously poll PS/2 data port 0x60 in case IRQ1 was masked or delayed
+    crate::keyboard::poll_data();
+
     // 1. Check structured input event queue from PS/2 keyboard IRQ1
     while let Some(ev) = poll_event() {
         if let InputEvent::KeyDown { key, ascii, .. } = ev {
