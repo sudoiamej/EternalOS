@@ -2,6 +2,7 @@ use crate::serial::SerialPort;
 use crate::framebuffer::{with_framebuffer, Color, Rect};
 use crate::sync::SpinLock;
 use crate::input::{poll_event, pop_char, InputEvent, KeyCode};
+use crate::net::NetworkDevice;
 
 pub const TERM_ROWS: usize = 36;
 pub const TERM_COLS: usize = 120;
@@ -211,10 +212,8 @@ pub fn init_terminal_viewport() {
         fb.fill_rect(Rect::new(panel_x, panel_y, panel_w, panel_h), Color::PANEL_BG);
         fb.draw_rect_border(Rect::new(panel_x, panel_y, panel_w, panel_h), Color::PANEL_BORDER);
 
-        // Terminal Title Header
-        fb.draw_text(panel_x + 20, panel_y + 14, "INTERACTIVE TERMINAL CONSOLE", Color::ACCENT_LAVENDER, None);
-        fb.draw_text(panel_x + 320, panel_y + 14, "|   Shell Session Active   |   COM1 + Framebuffer", Color::TEXT_MUTED, None);
-        fb.draw_hline(panel_x + 20, panel_y + 32, panel_w - 40, Color::PANEL_BORDER);
+        // Terminal Title Header & Live System Indicators
+        render_terminal_header(fb, panel_x, panel_y, panel_w);
 
         // Update footer status bar
         render_footer_bar(fb, 0);
@@ -230,6 +229,46 @@ pub fn init_terminal_viewport() {
     });
 }
 
+/// Render terminal header with title, live network status, and current date/time
+pub fn render_terminal_header(fb: &crate::framebuffer::Framebuffer, panel_x: usize, panel_y: usize, panel_w: usize) {
+    // Clear header background row
+    fb.fill_rect(Rect::new(panel_x + 2, panel_y + 2, panel_w - 4, 30), Color::PANEL_BG);
+
+    // Title on the left
+    fb.draw_text(panel_x + 20, panel_y + 12, "INTERACTIVE TERMINAL CONSOLE", Color::ACCENT_LAVENDER, None);
+
+    // Live Network Status Indicator
+    let (net_status_text, net_color) = crate::net::with_network_stack(|stack| {
+        if let Some(ref dev) = stack.device {
+            if dev.is_link_up() {
+                if !stack.config.ip.is_unspecified() && !stack.config.gateway.is_unspecified() {
+                    ("[NET: CONNECTED]", Color::SUCCESS_GREEN)
+                } else {
+                    ("[NET: NO INTERNET]", Color::WARN_AMBER)
+                }
+            } else {
+                ("[NET: DISCONNECTED]", Color::ERROR_RED)
+            }
+        } else {
+            ("[NET: NO DEVICE]", Color::TEXT_MUTED)
+        }
+    });
+
+    let net_x = panel_x + 300;
+    fb.draw_text(net_x, panel_y + 12, net_status_text, net_color, None);
+
+    // Live RTC Hardware Date / Time Indicator
+    let dt = crate::rtc::read_datetime();
+    let mut time_buf = [0u8; 32];
+    let time_str = dt.format_iso(&mut time_buf);
+
+    let time_x = (panel_x + panel_w).saturating_sub(200);
+    fb.draw_text(time_x, panel_y + 12, time_str, Color::TEXT_MUTED, None);
+
+    // Header divider line
+    fb.draw_hline(panel_x + 20, panel_y + 32, panel_w - 40, Color::PANEL_BORDER);
+}
+
 fn render_footer_bar(fb: &crate::framebuffer::Framebuffer, scroll_offset: usize) {
     let footer_y = fb.height - 32;
     fb.fill_rect(Rect::new(0, footer_y, fb.width, 32), Color::PANEL_BG);
@@ -241,9 +280,32 @@ fn render_footer_bar(fb: &crate::framebuffer::Framebuffer, scroll_offset: usize)
         fb.draw_text(24, footer_y + 8, "Status: Ready (Up/Down: History | PgUp/PgDn: Scrollback)", Color::SUCCESS_GREEN, None);
     }
 
-    let fb_info = "TTY: /dev/console (Serial & VESA)";
-    let info_x = fb.width.saturating_sub(300);
-    fb.draw_text(info_x, footer_y + 8, fb_info, Color::TEXT_MUTED, None);
+    // Uptime & TTY details on the right
+    let ticks = crate::timer::get_ticks();
+    let total_secs = ticks / 100;
+    let mins = total_secs / 60;
+    let secs = total_secs % 60;
+
+    let mut uptime_buf = [0u8; 32];
+    uptime_buf[0] = b'U';
+    uptime_buf[1] = b'p';
+    uptime_buf[2] = b':';
+    uptime_buf[3] = b' ';
+    uptime_buf[4] = b'0' + ((mins / 10) % 10) as u8;
+    uptime_buf[5] = b'0' + (mins % 10) as u8;
+    uptime_buf[6] = b'm';
+    uptime_buf[7] = b' ';
+    uptime_buf[8] = b'0' + ((secs / 10) % 10) as u8;
+    uptime_buf[9] = b'0' + (secs % 10) as u8;
+    uptime_buf[10] = b's';
+    let up_str = core::str::from_utf8(&uptime_buf[..11]).unwrap_or("Up: 00m 00s");
+
+    let right_info_x = fb.width.saturating_sub(380);
+    fb.draw_text(right_info_x, footer_y + 8, up_str, Color::TEXT_MUTED, None);
+
+    let fb_info = "TTY: /dev/console";
+    let info_x = fb.width.saturating_sub(180);
+    fb.draw_text(info_x, footer_y + 8, fb_info, Color::ACCENT_LAVENDER, None);
 }
 
 /// Clear console display on framebuffer and serial terminal
@@ -287,7 +349,12 @@ fn redraw_viewport_locked(fb: &crate::framebuffer::Framebuffer, con: &ConsoleSta
         return;
     }
 
-    // Update footer bar with scroll state
+    let panel_x = 40;
+    let panel_y = 20;
+    let panel_w = fb.width - 80;
+
+    // Refresh live header and footer bar with scroll state
+    render_terminal_header(fb, panel_x, panel_y, panel_w);
     render_footer_bar(fb, con.scrollback.scroll_offset);
 
     let offset = con.scrollback.scroll_offset;

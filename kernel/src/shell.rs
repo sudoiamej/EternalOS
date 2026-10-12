@@ -231,6 +231,13 @@ pub const COMMAND_REGISTRY: &[CommandDef] = &[
         usage: "uptime",
     },
     CommandDef {
+        name: "date",
+        aliases: &["time"],
+        category: CommandCategory::System,
+        summary: "Display live hardware date and time from RTC",
+        usage: "date",
+    },
+    CommandDef {
         name: "shutdown",
         aliases: &["poweroff"],
         category: CommandCategory::System,
@@ -460,6 +467,7 @@ pub fn execute_command(line: &str, ctx: &mut ShellContext) -> i32 {
         "eproc" => cmd_eproc(),
         "emount" => cmd_emount(ctx),
         "uptime" => cmd_uptime(),
+        "date" => cmd_date(),
 
         "eblock" => cmd_eblock(&args),
         "epart" => cmd_epart(&args),
@@ -1264,6 +1272,16 @@ fn cmd_uptime() -> i32 {
     console_write("ms (Ticks: ");
     console_write(format_u64(ticks, &mut u_buf));
     console_write(" @ 100 Hz)\r\n");
+    0
+}
+
+fn cmd_date() -> i32 {
+    let dt = crate::rtc::read_datetime();
+    let mut buf = [0u8; 32];
+    let iso = dt.format_iso(&mut buf);
+    console_write("Hardware RTC Date & Time: ");
+    console_write(iso);
+    console_write(" UTC\r\n");
     0
 }
 

@@ -54,6 +54,7 @@ pub mod vfs_tests;
 #[cfg(feature = "test-eternalfs")]
 pub mod eternalfs_tests;
 pub mod timer;
+pub mod rtc;
 pub mod vm;
 pub mod console;
 pub mod syscall;
