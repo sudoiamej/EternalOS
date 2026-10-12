@@ -212,7 +212,7 @@ pub fn init_terminal_viewport() {
         fb.draw_rect_border(Rect::new(panel_x, panel_y, panel_w, panel_h), Color::PANEL_BORDER);
 
         // Terminal Title Header
-        fb.draw_text(panel_x + 20, panel_y + 14, "INTERACTIVE TERMINAL CONSOLE", Color::ACCENT_CYAN, None);
+        fb.draw_text(panel_x + 20, panel_y + 14, "INTERACTIVE TERMINAL CONSOLE", Color::ACCENT_LAVENDER, None);
         fb.draw_text(panel_x + 320, panel_y + 14, "|   Shell Session Active   |   COM1 + Framebuffer", Color::TEXT_MUTED, None);
         fb.draw_hline(panel_x + 20, panel_y + 32, panel_w - 40, Color::PANEL_BORDER);
 
@@ -429,7 +429,7 @@ pub fn draw_text_cursor(visible: bool) {
         } else {
             Color::DARK_BG
         };
-        let color = if visible { Color::ACCENT_CYAN } else { bg_color };
+        let color = if visible { Color::ACCENT_LAVENDER } else { bg_color };
         fb.fill_rect(Rect::new(con.cursor_x, con.cursor_y + 13, 8, 2), color);
     });
 }

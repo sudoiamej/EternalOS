@@ -339,7 +339,7 @@ fn draw_cursor(driver: &mut MouseDriver, new_x: usize, new_y: usize) {
                 if sym == b'W' {
                     fb.put_pixel(px, py, Color::new(255, 255, 255));
                 } else if sym == b'B' {
-                    fb.put_pixel(px, py, Color::ACCENT_CYAN);
+                    fb.put_pixel(px, py, Color::ACCENT_LAVENDER);
                 }
             }
         }

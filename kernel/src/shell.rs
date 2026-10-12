@@ -1,3 +1,4 @@
+use crate::block::BlockDevice;
 use crate::console::{console_write, console_write_byte};
 use crate::net::NetworkDevice;
 use crate::shell_parser::{parse_command_line, ParsedArgs};
@@ -171,6 +172,13 @@ pub const COMMAND_REGISTRY: &[CommandDef] = &[
         summary: "Print line, word, and byte counts",
         usage: "wc <path>",
     },
+    CommandDef {
+        name: "efsck",
+        aliases: &["fsck"],
+        category: CommandCategory::Filesystem,
+        summary: "Validate EternalFS filesystem structures (read-only)",
+        usage: "efsck [--verbose] [device | /]",
+    },
 
     // --- System Information ---
     CommandDef {
@@ -224,6 +232,20 @@ pub const COMMAND_REGISTRY: &[CommandDef] = &[
     },
 
     // --- Hardware & Devices ---
+    CommandDef {
+        name: "eblock",
+        aliases: &["lsblk"],
+        category: CommandCategory::Hardware,
+        summary: "Inspect block devices and run read diagnostics",
+        usage: "eblock [--read-test [device]]",
+    },
+    CommandDef {
+        name: "epart",
+        aliases: &["fdisk"],
+        category: CommandCategory::Hardware,
+        summary: "Inspect disk partitions (MBR / GPT) (read-only)",
+        usage: "epart [--verbose] [device]",
+    },
     CommandDef {
         name: "epci",
         aliases: &["lspci"],
@@ -392,6 +414,7 @@ pub fn execute_command(line: &str, ctx: &mut ShellContext) -> i32 {
         "head" => cmd_head(&args, ctx),
         "tail" => cmd_tail(&args, ctx),
         "wc" => cmd_wc(&args, ctx),
+        "efsck" => cmd_efsck(&args),
 
         "eternal" => cmd_eternal(),
         "uname" => cmd_uname(&args),
@@ -401,6 +424,8 @@ pub fn execute_command(line: &str, ctx: &mut ShellContext) -> i32 {
         "emount" => cmd_emount(ctx),
         "uptime" => cmd_uptime(),
 
+        "eblock" => cmd_eblock(&args),
+        "epart" => cmd_epart(&args),
         "epci" => cmd_epci(),
         "edrv" => cmd_edrv(),
         "mouse" => cmd_mouse(),
@@ -1528,6 +1553,603 @@ fn cmd_einfo() -> i32 {
     console_write("  Language     : 100% Safe-Enforced Rust (no_std)\r\n");
     console_write("  Palette      : Eternal Purple (#7C3AED, #A78BFA)\r\n");
     0
+}
+
+// -----------------------------------------------------------------------------
+// Disk Utilities: epart, efsck, eblock
+// -----------------------------------------------------------------------------
+
+/// Diagnostic helper struct wrapping a mutable reference to VirtioBlockDevice as a BlockDevice
+pub struct VirtioBlockRef<'a>(pub &'a mut crate::virtio_blk::VirtioBlockDevice);
+
+impl<'a> crate::block::BlockDevice for VirtioBlockRef<'a> {
+    fn info(&self) -> crate::block::BlockDeviceInfo {
+        self.0.info()
+    }
+
+    fn read_sectors(&mut self, start_sector: u64, sector_count: u32, buf: &mut [u8]) -> Result<(), crate::block::BlockError> {
+        self.0.read_sectors(start_sector, sector_count, buf)
+    }
+
+    fn write_sectors(&mut self, start_sector: u64, sector_count: u32, buf: &[u8]) -> Result<(), crate::block::BlockError> {
+        self.0.write_sectors(start_sector, sector_count, buf)
+    }
+}
+
+pub fn cmd_epart(args: &ParsedArgs) -> i32 {
+    let mut verbose = false;
+    let mut target_device: Option<&str> = None;
+
+    for i in 1..args.len() {
+        if let Some(arg) = args.get(i) {
+            if arg == "--help" || arg == "-h" {
+                console_write("epart: Partition Inspector (Read-Only)\r\n");
+                console_write("Usage: epart [--verbose] [device]\r\n");
+                console_write("Inspects MBR and GPT partition tables on active block storage devices.\r\n");
+                return 0;
+            } else if arg == "--verbose" || arg == "-v" {
+                verbose = true;
+            } else if !arg.starts_with('-') {
+                target_device = Some(arg);
+            }
+        }
+    }
+
+    console_write("=== [EternalOS Partition Inspector (epart)] ===\r\n");
+
+    let inspected = crate::virtio_blk::with_block_device(|dev| {
+        let info = dev.info();
+        let dev_name = info.name_as_str();
+
+        if let Some(target) = target_device {
+            if target != "virtio0" && target != "blk0" && target != dev_name {
+                console_write("epart: device '");
+                console_write(target);
+                console_write("' not found (active: virtio0 / '");
+                console_write(dev_name);
+                console_write("')\r\n");
+                return 1;
+            }
+        }
+
+        console_write("Device       : virtio0 (");
+        console_write(dev_name);
+        console_write(")\r\n");
+
+        let mut b = [0u8; 32];
+        console_write("Capacity     : ");
+        console_write(format_u64(info.total_sectors, &mut b));
+        console_write(" sectors (");
+        if let Some(cap) = info.capacity_bytes() {
+            let mib = cap / (1024 * 1024);
+            console_write(format_u64(mib, &mut b));
+            console_write(" MiB, ");
+        }
+        console_write(format_u64(info.sector_size as u64, &mut b));
+        console_write(" bytes/sector)\r\n");
+
+        let table = match crate::partition::discover_partitions(dev) {
+            Ok(t) => t,
+            Err(e) => {
+                console_write("Partition Table: Parser Error (");
+                match e {
+                    crate::partition::PartitionError::BlockIo(_) => console_write("Block I/O Error"),
+                    crate::partition::PartitionError::UnsupportedSectorSize(sz) => {
+                        console_write("Unsupported Sector Size: ");
+                        console_write(format_u64(sz as u64, &mut b));
+                    }
+                    crate::partition::PartitionError::DeviceTooSmall => console_write("Device capacity too small"),
+                    crate::partition::PartitionError::InvalidMbrSignature => console_write("No valid MBR signature found"),
+                    crate::partition::PartitionError::InvalidBootIndicator(_) => console_write("Invalid MBR boot indicator"),
+                    crate::partition::PartitionError::InvalidGptSignature => console_write("Invalid GPT signature"),
+                    crate::partition::PartitionError::InvalidHeaderSize(_) => console_write("Invalid GPT header size"),
+                    crate::partition::PartitionError::HeaderCrcMismatch { .. } => console_write("GPT header CRC mismatch"),
+                    crate::partition::PartitionError::EntryArrayCrcMismatch { .. } => console_write("GPT entry array CRC mismatch"),
+                    crate::partition::PartitionError::InvalidHeaderLba => console_write("Invalid header LBA location"),
+                    crate::partition::PartitionError::InvalidUsableLbaRange => console_write("Invalid usable LBA range"),
+                    crate::partition::PartitionError::InvalidEntryGeometry => console_write("Invalid entry geometry"),
+                    crate::partition::PartitionError::ArithmeticOverflow => console_write("Integer arithmetic overflow in LBA range"),
+                    crate::partition::PartitionError::OutOfBounds { .. } => console_write("Partition LBA range exceeds disk capacity"),
+                    crate::partition::PartitionError::OverlappingPartitions { .. } => console_write("Overlapping partition boundaries detected"),
+                    crate::partition::PartitionError::DuplicateUniqueGuid => console_write("Duplicate unique GUID detected"),
+                    crate::partition::PartitionError::UnsupportedExtendedPartition(_) => console_write("Extended partition unsupported"),
+                    crate::partition::PartitionError::RegistryOverflow => console_write("Partition registry overflow"),
+                }
+                console_write(")\r\n");
+                return 1;
+            }
+        };
+
+        console_write("Scheme       : ");
+        match table.table_type {
+            crate::partition::PartitionTableType::Mbr => console_write("MBR (Master Boot Record)\r\n"),
+            crate::partition::PartitionTableType::Gpt => console_write("GPT (GUID Partition Table)\r\n"),
+            crate::partition::PartitionTableType::None => console_write("None (Unpartitioned raw storage)\r\n"),
+        }
+
+        console_write("Partitions   : ");
+        console_write(format_u64(table.count as u64, &mut b));
+        console_write(" discovered\r\n\r\n");
+
+        if table.count == 0 {
+            console_write("  (No active partitions found on device)\r\n");
+            return 0;
+        }
+
+        console_write("Index  Type           Start LBA    Sectors      Size (MiB)   Boot  Valid\r\n");
+        console_write("----------------------------------------------------------------------\r\n");
+
+        for i in 0..table.count {
+            let p = &table.partitions[i];
+
+            // Index
+            console_write(format_u64(p.index as u64, &mut b));
+            let pad_idx = 7usize.saturating_sub(format_u64(p.index as u64, &mut b).len());
+            for _ in 0..pad_idx { console_write(" "); }
+
+            // Type
+            match p.part_type {
+                crate::partition::PartitionType::Mbr(code) => {
+                    console_write("MBR 0x");
+                    console_write(format_hex_u16(code as u16, &mut b));
+                    let pad = 15usize.saturating_sub(8);
+                    for _ in 0..pad { console_write(" "); }
+                }
+                crate::partition::PartitionType::Gpt(_) => {
+                    console_write("GPT EFI/Data   ");
+                }
+            }
+
+            // Start LBA
+            console_write(format_u64(p.start_lba, &mut b));
+            let pad_start = 13usize.saturating_sub(format_u64(p.start_lba, &mut b).len());
+            for _ in 0..pad_start { console_write(" "); }
+
+            // Sectors
+            console_write(format_u64(p.sector_count, &mut b));
+            let pad_sec = 13usize.saturating_sub(format_u64(p.sector_count, &mut b).len());
+            for _ in 0..pad_sec { console_write(" "); }
+
+            // Size (MiB)
+            let size_bytes = p.sector_count.checked_mul(info.sector_size as u64);
+            let size_mib_str = match size_bytes {
+                Some(bytes) => {
+                    let mib = bytes / (1024 * 1024);
+                    format_u64(mib, &mut b)
+                }
+                None => "OVERFLOW",
+            };
+            console_write(size_mib_str);
+            let pad_sz = 13usize.saturating_sub(size_mib_str.len());
+            for _ in 0..pad_sz { console_write(" "); }
+
+            // Bootable
+            if p.bootable {
+                console_write("Yes   ");
+            } else {
+                console_write("No    ");
+            }
+
+            // Boundary validation within device capacity
+            let valid = match p.end_lba() {
+                Some(end) => end <= info.total_sectors,
+                None => false,
+            };
+            if valid {
+                console_write("OK\r\n");
+            } else {
+                console_write("BOUNDS_ERR\r\n");
+            }
+
+            if verbose {
+                if let crate::partition::PartitionType::Gpt(_) = p.part_type {
+                    console_write("       Unique GUID: ");
+                    let mut g_buf = [0u8; 64];
+                    use core::fmt::Write;
+                    struct BufWriter<'w> { buf: &'w mut [u8], pos: usize }
+                    impl<'w> Write for BufWriter<'w> {
+                        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+                            let bytes = s.as_bytes();
+                            let rem = self.buf.len().saturating_sub(self.pos);
+                            let to_copy = bytes.len().min(rem);
+                            self.buf[self.pos..self.pos + to_copy].copy_from_slice(&bytes[..to_copy]);
+                            self.pos += to_copy;
+                            Ok(())
+                        }
+                    }
+                    let mut w = BufWriter { buf: &mut g_buf, pos: 0 };
+                    let _ = write!(w, "{}", p.unique_guid);
+                    let g_len = w.pos;
+                    if let Ok(s) = core::str::from_utf8(&g_buf[..g_len]) {
+                        console_write(s);
+                    }
+                    console_write("\r\n");
+                    if p.name_len > 0 {
+                        console_write("       Name       : ");
+                        console_write(p.name_as_str());
+                        console_write("\r\n");
+                    }
+                }
+            }
+        }
+        0
+    });
+
+    match inspected {
+        Some(code) => code,
+        None => {
+            console_write("epart: No block storage device available on system.\r\n");
+            1
+        }
+    }
+}
+
+pub fn cmd_efsck(args: &ParsedArgs) -> i32 {
+    let mut verbose = false;
+
+    for i in 1..args.len() {
+        if let Some(arg) = args.get(i) {
+            if arg == "--help" || arg == "-h" {
+                console_write("efsck: EternalFS Read-Only Consistency & Integrity Checker\r\n");
+                console_write("Usage: efsck [--verbose] [device | /]\r\n");
+                console_write("Validates Superblock, Inodes, CRC32 checksums, and directory tree without writing.\r\n");
+                console_write("Note : Filesystem repair is unsupported (EternalFS is strictly read-only).\r\n");
+                return 0;
+            } else if arg == "--verbose" || arg == "-v" {
+                verbose = true;
+            }
+        }
+    }
+
+    console_write("=== [EternalFS Read-Only Checker (efsck)] ===\r\n");
+
+    let result = crate::virtio_blk::with_block_device(|dev| {
+        let table = match crate::partition::discover_partitions(dev) {
+            Ok(t) => t,
+            Err(e) => {
+                console_write("efsck: failed to read disk partitions: ");
+                match e {
+                    crate::partition::PartitionError::BlockIo(_) => console_write("I/O Error\r\n"),
+                    _ => console_write("Partition Table Error\r\n"),
+                }
+                return 1;
+            }
+        };
+
+        if table.count == 0 {
+            console_write("efsck: no partitions found on device to check.\r\n");
+            return 1;
+        }
+
+        let p0 = &table.partitions[0];
+        console_write("Target       : virtio0, Partition 0 (LBA ");
+        let mut b = [0u8; 32];
+        console_write(format_u64(p0.start_lba, &mut b));
+        console_write("..+");
+        console_write(format_u64(p0.sector_count, &mut b));
+        console_write(")\r\n");
+
+        if p0.sector_count < 4 {
+            console_write("efsck: partition is too small for an EternalFS filesystem.\r\n");
+            return 2;
+        }
+
+        // 1. Read and validate Superblock
+        let mut sb_buf = [0u8; 1024];
+        let sb_lba = match p0.start_lba.checked_add(2) {
+            Some(lba) => lba,
+            None => {
+                console_write("efsck: arithmetic overflow in superblock LBA calculation.\r\n");
+                return 2;
+            }
+        };
+
+        if let Err(e) = dev.read_sectors(sb_lba, 2, &mut sb_buf) {
+            console_write("efsck: I/O error reading Superblock at LBA ");
+            console_write(format_u64(sb_lba, &mut b));
+            console_write(": ");
+            match e {
+                crate::block::BlockError::Timeout => console_write("Timeout\r\n"),
+                crate::block::BlockError::HardwareError(code) => {
+                    console_write("Hardware error 0x");
+                    console_write(format_hex_u16(code as u16, &mut b));
+                    console_write("\r\n");
+                }
+                _ => console_write("I/O Failure\r\n"),
+            }
+            return 3;
+        }
+
+        let mut passed_checks = 0;
+        let mut failed_checks = 0;
+
+        // Check 1: Magic Number
+        if &sb_buf[0..8] == crate::vfs::eternalfs::ETERNALFS_MAGIC {
+            passed_checks += 1;
+            if verbose { console_write("  [PASS] Superblock magic signature ('ETERNAL1')\r\n"); }
+        } else {
+            console_write("  [FAIL] Superblock magic signature mismatch\r\n");
+            console_write("efsck: Not an EternalFS volume or invalid filesystem format.\r\n");
+            return 2;
+        }
+
+        // Check 2: Superblock CRC32 Checksum
+        let expected_crc = u32::from_le_bytes(sb_buf[0x3C..0x40].try_into().unwrap());
+        let computed_crc = crate::partition::crc32(&sb_buf[0x00..0x3C]);
+        if expected_crc == computed_crc {
+            passed_checks += 1;
+            if verbose { console_write("  [PASS] Superblock IEEE 802.3 CRC32 checksum\r\n"); }
+        } else {
+            failed_checks += 1;
+            console_write("  [FAIL] Superblock CRC32 checksum mismatch (corrupted metadata)\r\n");
+        }
+
+        // Check 3: Version & Block Size
+        let version = u32::from_le_bytes(sb_buf[0x08..0x0C].try_into().unwrap());
+        let block_sz = u32::from_le_bytes(sb_buf[0x0C..0x10].try_into().unwrap());
+        if version == crate::vfs::eternalfs::ETERNALFS_VERSION && block_sz == crate::vfs::eternalfs::ETERNALFS_BLOCK_SIZE as u32 {
+            passed_checks += 1;
+            if verbose { console_write("  [PASS] Filesystem version (1) and block size (1024 bytes)\r\n"); }
+        } else {
+            failed_checks += 1;
+            console_write("  [FAIL] Unsupported version or non-standard block size\r\n");
+        }
+
+        // Decode full superblock
+        let sb = match crate::vfs::eternalfs::Superblock::decode(&sb_buf, p0.sector_count) {
+            Ok(s) => {
+                passed_checks += 1;
+                if verbose { console_write("  [PASS] Geometry bounds within partition capacity\r\n"); }
+                s
+            }
+            Err(_) => {
+                console_write("  [FAIL] Superblock geometry validation failed\r\n");
+                return 2;
+            }
+        };
+
+        // Check 4: Root Inode Validity & Inode Table Bounds
+        if sb.root_inode > 0 && sb.root_inode <= sb.total_inodes {
+            passed_checks += 1;
+            if verbose { console_write("  [PASS] Root inode ID bounds\r\n"); }
+        } else {
+            failed_checks += 1;
+            console_write("  [FAIL] Root inode ID out of valid inode range\r\n");
+        }
+
+        // Check 5: Inode Table & Directory Traversal Verification (Read-Only Mount)
+        let dev_ref = VirtioBlockRef(dev);
+        let efs = match crate::vfs::eternalfs::EternalFs::mount(dev_ref, p0.start_lba, p0.sector_count) {
+            Ok(fs) => {
+                passed_checks += 1;
+                if verbose { console_write("  [PASS] Mount verification in read-only mode\r\n"); }
+                fs
+            }
+            Err(_) => {
+                console_write("  [FAIL] Failed to mount volume for structural inspection\r\n");
+                return 2;
+            }
+        };
+
+        // Inspect Root Directory Entries (Inode 1)
+        let mut entries = [crate::vfs::DirEntry::empty(); 16];
+        match crate::vfs::FileSystem::readdir(&efs, sb.root_inode, 0, &mut entries) {
+            Ok(count) => {
+                passed_checks += 1;
+                if verbose {
+                    console_write("  [PASS] Root directory structure readable (");
+                    console_write(format_u64(count as u64, &mut b));
+                    console_write(" entries found)\r\n");
+                }
+            }
+            Err(_) => {
+                failed_checks += 1;
+                console_write("  [FAIL] Root directory readdir failed or corrupt\r\n");
+            }
+        }
+
+        // Validate Inodes across table (up to total_inodes or capped at 64)
+        let inspect_count = sb.total_inodes.min(64);
+        let mut inode_errors = 0;
+        for in_id in 1..=inspect_count {
+            match efs.read_inode(in_id) {
+                Ok(inode) => {
+                    // Check direct block pointers
+                    for ptr in inode.direct_blocks.iter() {
+                        let block_no = *ptr as u64;
+                        if block_no != 0 && (block_no < sb.data_block_start || block_no >= sb.total_blocks) {
+                            inode_errors += 1;
+                        }
+                    }
+                }
+                Err(_) => {
+                    inode_errors += 1;
+                }
+            }
+        }
+
+        if inode_errors == 0 {
+            passed_checks += 1;
+            if verbose {
+                console_write("  [PASS] Sample Inode headers and block pointers validated (");
+                console_write(format_u64(inspect_count, &mut b));
+                console_write(" inodes checked)\r\n");
+            }
+        } else {
+            failed_checks += 1;
+            console_write("  [FAIL] Detected ");
+            console_write(format_u64(inode_errors as u64, &mut b));
+            console_write(" invalid or out-of-range inode/block references\r\n");
+        }
+
+        console_write("\r\n--- Validation Summary ---\r\n");
+        console_write("  Passed Checks: ");
+        console_write(format_u64(passed_checks as u64, &mut b));
+        console_write("\r\n  Failed Checks: ");
+        console_write(format_u64(failed_checks as u64, &mut b));
+        console_write("\r\n  Repair Status: Unsupported (Filesystem is read-only by design)\r\n");
+
+        if failed_checks == 0 {
+            console_write("Status: Volume is clean. No structural errors detected.\r\n");
+            0
+        } else {
+            console_write("Status: Volume has errors! Metadata inconsistencies found.\r\n");
+            2
+        }
+    });
+
+    match result {
+        Some(code) => code,
+        None => {
+            console_write("efsck: No block storage device available.\r\n");
+            1
+        }
+    }
+}
+
+pub fn cmd_eblock(args: &ParsedArgs) -> i32 {
+    let mut run_read_test = false;
+    let mut target_device: Option<&str> = None;
+
+    for i in 1..args.len() {
+        if let Some(arg) = args.get(i) {
+            if arg == "--help" || arg == "-h" {
+                console_write("eblock: Block-Device Diagnostics & Inspection\r\n");
+                console_write("Usage: eblock [--read-test [device]]\r\n");
+                console_write("Displays logical sector size, capacity, driver type, and performs bounded read tests.\r\n");
+                return 0;
+            } else if arg == "--read-test" || arg == "-t" {
+                run_read_test = true;
+            } else if !arg.starts_with('-') {
+                target_device = Some(arg);
+            }
+        }
+    }
+
+    console_write("=== [EternalOS Block-Device Diagnostics (eblock)] ===\r\n");
+
+    let result = crate::virtio_blk::with_block_device(|dev| {
+        let info = dev.info();
+        let dev_name = info.name_as_str();
+
+        if let Some(target) = target_device {
+            if target != "virtio0" && target != "blk0" && target != dev_name {
+                console_write("eblock: device '");
+                console_write(target);
+                console_write("' not found\r\n");
+                return 1;
+            }
+        }
+
+        console_write("Device ID    : virtio0\r\n");
+        console_write("Driver Type  : QEMU VirtIO Block Controller (VirtIO Modern / Legacy)\r\n");
+        console_write("Model / Name : ");
+        console_write(dev_name);
+        console_write("\r\n");
+
+        // Query PCI location
+        let pci_loc = crate::pci::with_pci_registry(|reg| {
+            reg.find_by_vendor_device(0x1af4, 0x1001).map(|d| (d.bus, d.device, d.function))
+        });
+        if let Some((bus, slot, func)) = pci_loc {
+            console_write("PCI Location : Bus ");
+            let mut b = [0u8; 32];
+            console_write(format_u64(bus as u64, &mut b));
+            console_write(", Device ");
+            console_write(format_u64(slot as u64, &mut b));
+            console_write(", Function ");
+            console_write(format_u64(func as u64, &mut b));
+            console_write("\r\n");
+        }
+
+        console_write("Sector Size  : ");
+        let mut b = [0u8; 32];
+        console_write(format_u64(info.sector_size as u64, &mut b));
+        console_write(" bytes (logical)\r\n");
+
+        console_write("Capacity     : ");
+        console_write(format_u64(info.total_sectors, &mut b));
+        console_write(" sectors (");
+        if let Some(cap) = info.capacity_bytes() {
+            let mib = cap / (1024 * 1024);
+            console_write(format_u64(mib, &mut b));
+            console_write(" MiB total)\r\n");
+        } else {
+            console_write("Capacity Overflow)\r\n");
+        }
+
+        console_write("Access Mode  : ");
+        if info.read_only {
+            console_write("Read-Only (writes prohibited)\r\n");
+        } else {
+            console_write("Read/Write capable\r\n");
+        }
+
+        console_write("Status       : Online & Initialized\r\n");
+        console_write("SMART Health : Not supported on VirtIO virtual block interface\r\n");
+
+        if run_read_test {
+            console_write("\r\n--- Bounded Read Diagnostics ---\r\n");
+            let test_sectors = 16u32.min(info.total_sectors as u32);
+            console_write("Reading ");
+            console_write(format_u64(test_sectors as u64, &mut b));
+            console_write(" sectors from LBA 0...\r\n");
+
+            let start_tick = crate::timer::get_ticks();
+            let mut read_buf = [0u8; 512];
+            let mut sectors_ok = 0u32;
+            let mut io_error = false;
+
+            for sec in 0..test_sectors as u64 {
+                if let Err(e) = dev.read_sectors(sec, 1, &mut read_buf) {
+                    console_write("  [ERROR] Failed to read sector ");
+                    console_write(format_u64(sec, &mut b));
+                    console_write(": ");
+                    match e {
+                        crate::block::BlockError::OutOfBounds => console_write("Out of bounds\r\n"),
+                        crate::block::BlockError::Timeout => console_write("Operation timed out\r\n"),
+                        _ => console_write("I/O error\r\n"),
+                    }
+                    io_error = true;
+                    break;
+                }
+                sectors_ok += 1;
+            }
+
+            let elapsed_ticks = crate::timer::get_ticks().saturating_sub(start_tick);
+            let elapsed_ms = elapsed_ticks * crate::timer::MS_PER_TICK;
+
+            console_write("Sectors Read : ");
+            console_write(format_u64(sectors_ok as u64, &mut b));
+            console_write(" / ");
+            console_write(format_u64(test_sectors as u64, &mut b));
+            console_write(" (");
+            let bytes_read = (sectors_ok as u64).saturating_mul(info.sector_size as u64);
+            console_write(format_u64(bytes_read, &mut b));
+            console_write(" bytes)\r\n");
+
+            console_write("Elapsed Time : ");
+            console_write(format_u64(elapsed_ms.max(1), &mut b));
+            console_write(" ms\r\n");
+
+            if io_error {
+                console_write("Read Test Result: FAILED (I/O errors encountered)\r\n");
+                return 1;
+            } else {
+                console_write("Read Test Result: PASSED (All sectors verified)\r\n");
+            }
+        }
+
+        0
+    });
+
+    match result {
+        Some(code) => code,
+        None => {
+            console_write("eblock: No block storage device discovered or registered.\r\n");
+            1
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------

@@ -100,6 +100,35 @@ EternalOS/
     └── limine.exe          # Limine bootloader host deployment tool
 ```
 
+## 💾 Disk Utilities & Eternal Purple Visual Identity (Milestone)
+
+### 1. Architecture & Capabilities
+- **Disk Utilities (`epart`, `efsck`, `eblock` in `shell.rs`):**
+  - **`epart` (Partition Inspector - Read-Only):**
+    - Inspects real block devices and parses MBR / GPT partition tables via `crate::partition::discover_partitions`.
+    - Formats device identifier, sector count, logical sector size, partition indices, partition type codes, starting LBAs, sector counts, partition capacity in MiB (with 64-bit overflow prevention), bootable flags, and device capacity bounds validation.
+    - `--verbose` mode renders GPT Unique GUIDs and UTF-8 partition label names.
+  - **`efsck` (EternalFS Read-Only Consistency Checker):**
+    - Validates attached storage filesystems without writing or modifying metadata.
+    - Performs structural consistency checks: Superblock magic signature (`ETERNAL1`), IEEE 802.3 CRC32 checksum, filesystem version and block size, partition capacity geometry, root inode range, read-only mount initialization, root directory `readdir` traversal, and inode table direct block pointer bounds.
+    - Provides truthful validation summary (Passed, Failed, and Unsupported Repair status).
+  - **`eblock` (Block Device Diagnostics & Bounded Read-Test):**
+    - Inspects active block storage controller metadata (`name`, logical sector size, total sectors, capacity in MiB, access permissions, PCI bus/device/function location).
+    - `--read-test` flag runs a bounded 16-sector read test from LBA 0 through the block-device abstraction with elapsed PIT timer duration reporting.
+    - Truthfully reports uninitialized state or unsupported SMART diagnostics on VirtIO virtual disks.
+- **Eternal Purple Brand Unification & White Logo (`framebuffer.rs`, `console.rs`, `mouse.rs`):**
+  - Centralized palette design tokens:
+    - Primary Eternal Purple: `#7C3AED` (`Color::ACCENT_PURPLE`)
+    - Secondary Purple: `#6D28D9` (`Color::ACCENT_SECONDARY`)
+    - Soft Lavender: `#A78BFA` (`Color::ACCENT_LAVENDER`)
+    - Highlight Lavender: `#C4B5FD` (`Color::ACCENT_HIGHLIGHT`)
+    - Dark Background: `#111019` (`Color::DARK_BG`)
+    - Logo Asset: Pure White `#FFFFFF` (`Color::WHITE`)
+  - Replaced legacy cyan/blue branding accents across boot header bars, navigation lines, terminal frame borders, text cursor indicators, and mouse cursor interiors.
+  - Semantic status colors preserved: Emerald Green (`#2ECC71`) for passing diagnostics, Amber (`#F39C12`) for scrollback indicators, Red (`#EF4444`) for errors, and Gray (`#948FA8`) for muted hardware info.
+
+---
+
 ## 🌐 Modular Networking Stack & Intel E1000 Driver (Milestone)
 
 ### 1. Architecture & Capabilities

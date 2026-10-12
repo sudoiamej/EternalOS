@@ -192,6 +192,29 @@ fn test_system_commands(ctx: &mut ShellContext) {
     let s_edrv = execute_command("edrv", ctx);
     assert_eq!(s_edrv, 0);
 
+    // Test new disk utilities: epart, efsck, eblock
+    let s_epart_help = execute_command("epart --help", ctx);
+    assert_eq!(s_epart_help, 0);
+
+    let s_efsck_help = execute_command("efsck --help", ctx);
+    assert_eq!(s_efsck_help, 0);
+
+    let s_eblock_help = execute_command("eblock --help", ctx);
+    assert_eq!(s_eblock_help, 0);
+
+    // Run active inspection on real attached VirtIO disk
+    let s_eblock = execute_command("eblock", ctx);
+    assert_eq!(s_eblock, 0);
+
+    let s_eblock_test = execute_command("eblock --read-test", ctx);
+    assert_eq!(s_eblock_test, 0);
+
+    let s_epart = execute_command("epart", ctx);
+    assert_eq!(s_epart, 0);
+
+    let s_epart_verb = execute_command("epart --verbose", ctx);
+    assert_eq!(s_epart_verb, 0);
+
     let s_echeck = execute_command("echeck", ctx);
     assert_eq!(s_echeck, 0);
 

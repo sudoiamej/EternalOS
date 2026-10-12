@@ -18,21 +18,26 @@ pub struct Color {
 impl Color {
     pub const BLACK: Color = Color { r: 0x00, g: 0x00, b: 0x00 };
     pub const WHITE: Color = Color { r: 0xFF, g: 0xFF, b: 0xFF };
-    pub const DARK_BG: Color = Color { r: 0x0F, g: 0x14, b: 0x1C }; // Deep navy/slate background
-    pub const PANEL_BG: Color = Color { r: 0x18, g: 0x22, b: 0x30 }; // Elevated panel slate
-    pub const PANEL_BORDER: Color = Color { r: 0x2B, g: 0x3E, b: 0x55 }; // Subdued border
-    pub const ACCENT_CYAN: Color = Color { r: 0x00, g: 0xD2, b: 0xFF }; // Electric cyan accent
-    pub const ACCENT_BLUE: Color = Color { r: 0x3A, g: 0x86, b: 0xFF }; // Clean blue accent
+    pub const DARK_BG: Color = Color { r: 0x11, g: 0x10, b: 0x19 }; // Dark purple/slate background (#111019)
+    pub const PANEL_BG: Color = Color { r: 0x1A, g: 0x18, b: 0x27 }; // Elevated purple slate panel
+    pub const PANEL_BORDER: Color = Color { r: 0x36, g: 0x2D, b: 0x4F }; // Subdued purple border
+    pub const ACCENT_PURPLE: Color = Color { r: 0x7C, g: 0x3A, b: 0xED }; // Primary Eternal Purple (#7C3AED)
+    pub const ACCENT_SECONDARY: Color = Color { r: 0x6D, g: 0x28, b: 0xD9 }; // Secondary Purple (#6D28D9)
+    pub const ACCENT_LAVENDER: Color = Color { r: 0xA7, g: 0x8B, b: 0xFA }; // Soft Lavender (#A78BFA)
+    pub const ACCENT_HIGHLIGHT: Color = Color { r: 0xC4, g: 0xB5, b: 0xFD }; // Highlight Lavender (#C4B5FD)
     pub const SUCCESS_GREEN: Color = Color { r: 0x2E, g: 0xCC, b: 0x71 }; // Emerald pass green
     pub const WARN_AMBER: Color = Color { r: 0xF3, g: 0x9C, b: 0x12 }; // Amber
+    pub const ERROR_RED: Color = Color { r: 0xEF, g: 0x44, b: 0x44 }; // Readable red
     pub const TEXT_PRIMARY: Color = Color { r: 0xFA, g: 0xFA, b: 0xFC }; // Bright crisp white
-    pub const TEXT_MUTED: Color = Color { r: 0x8A, g: 0x9B, b: 0xAF }; // Cool muted grey-blue
+    pub const TEXT_MUTED: Color = Color { r: 0x94, g: 0x8F, b: 0xA8 }; // Cool muted lavender-grey
 
-    // Eternal Purple palette identity
-    pub const PURPLE: Color = Color { r: 0x7C, g: 0x3A, b: 0xED }; // Deep electric purple
-    pub const LAVENDER: Color = Color { r: 0xA7, g: 0x8B, b: 0xFA }; // Lavender secondary
-    pub const HIGHLIGHT: Color = Color { r: 0xC4, g: 0xB5, b: 0xFD }; // Lavender highlight
-    pub const DARK_PURPLE_BG: Color = Color { r: 0x11, g: 0x10, b: 0x19 }; // Dark purple terminal bg
+    // Aliases for compatibility
+    pub const PURPLE: Color = Self::ACCENT_PURPLE;
+    pub const LAVENDER: Color = Self::ACCENT_LAVENDER;
+    pub const HIGHLIGHT: Color = Self::ACCENT_HIGHLIGHT;
+    pub const DARK_PURPLE_BG: Color = Self::DARK_BG;
+    pub const ACCENT_CYAN: Color = Self::ACCENT_LAVENDER; // Compatibility fallback mapped to lavender
+    pub const ACCENT_BLUE: Color = Self::ACCENT_PURPLE; // Compatibility fallback mapped to purple
 
     #[inline]
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
@@ -454,11 +459,11 @@ pub fn render_boot_screen() {
 
         // 2. Draw Top Navigation / Header Bar
         fb.fill_rect(Rect::new(0, 0, fb.width, 48), Color::PANEL_BG);
-        fb.draw_hline(0, 48, fb.width, Color::ACCENT_CYAN);
+        fb.draw_hline(0, 48, fb.width, Color::ACCENT_PURPLE);
 
         // Header Title
-        fb.draw_text(24, 16, "PROJECT ETERNALOS", Color::ACCENT_CYAN, None);
-        fb.draw_text(200, 16, "|   x86-64 Hybrid Kernel   |   Phase 13A Early Graphics", Color::TEXT_MUTED, None);
+        fb.draw_text(24, 16, "PROJECT ETERNALOS", Color::ACCENT_LAVENDER, None);
+        fb.draw_text(200, 16, "|   x86-64 Hybrid Kernel   |   Eternal Purple Architecture", Color::TEXT_MUTED, None);
 
         // 3. Main Center Branding & Logo Card
         let card_x = 40;
@@ -469,7 +474,7 @@ pub fn render_boot_screen() {
         fb.fill_rect(Rect::new(card_x, card_y, card_w, card_h), Color::PANEL_BG);
         fb.draw_rect_border(Rect::new(card_x, card_y, card_w, card_h), Color::PANEL_BORDER);
 
-        // Render embedded monochrome EternalOS logo asset
+        // Render embedded monochrome EternalOS logo asset in Pure White (#FFFFFF)
         let logo_x = card_x + 30;
         let logo_y = card_y + 45;
         fb.draw_monochrome_bitmap(
@@ -478,7 +483,7 @@ pub fn render_boot_screen() {
             crate::logo_asset::LOGO_WIDTH,
             crate::logo_asset::LOGO_HEIGHT,
             &crate::logo_asset::LOGO_BITMAP,
-            Color::ACCENT_CYAN,
+            Color::WHITE,
         );
 
         // Wordmark and System Identity
@@ -494,7 +499,7 @@ pub fn render_boot_screen() {
         fb.fill_rect(Rect::new(card_x, diag_y, card_w, diag_h), Color::PANEL_BG);
         fb.draw_rect_border(Rect::new(card_x, diag_y, card_w, diag_h), Color::PANEL_BORDER);
 
-        fb.draw_text(card_x + 20, diag_y + 16, "SYSTEM DIAGNOSTICS & VERIFICATION", Color::ACCENT_CYAN, None);
+        fb.draw_text(card_x + 20, diag_y + 16, "SYSTEM DIAGNOSTICS & VERIFICATION", Color::ACCENT_LAVENDER, None);
         fb.draw_hline(card_x + 20, diag_y + 36, card_w - 40, Color::PANEL_BORDER);
 
         let col1_x = card_x + 24;
