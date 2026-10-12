@@ -246,3 +246,21 @@ pub fn init_heap() -> Result<(), &'static str> {
     crate::log_info!("Kernel Heap initialized and mapped successfully with WRITABLE + NO_EXECUTE permissions.");
     Ok(())
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct HeapStats {
+    pub total_bytes: u64,
+    pub allocated_bytes: u64,
+    pub free_bytes: u64,
+}
+
+pub fn get_heap_stats() -> HeapStats {
+    let (total, alloc, freed) = HEAP_ALLOCATOR.lock().stats();
+    let currently_allocated = alloc.saturating_sub(freed);
+    HeapStats {
+        total_bytes: total as u64,
+        allocated_bytes: currently_allocated as u64,
+        free_bytes: (total.saturating_sub(currently_allocated)) as u64,
+    }
+}
+

@@ -542,4 +542,88 @@ EternalOS/
 .\run.ps1 -Headless -Feature test-task
 .\run.ps1 -Headless -Feature test-heap
 .\run.ps1 -Headless -Feature test-memory
+.\run.ps1 -Headless -Feature test-net
+.\run.ps1 -Headless -Feature test-usb
+.\run.ps1 -Headless -Feature test-shell
 ```
+
+---
+
+## 🖥️ Eternal Control Suite (ECS) & Native Server Infrastructure
+
+EternalOS features a native server administration and diagnostics ecosystem designed around modular, low-resource server operating principles:
+
+### 1. Standardized CLI Administration Contract
+- **Predictable Exit Codes:**
+  - `0`: Success
+  - `1`: Operational failure
+  - `2`: Invalid usage / bad syntax
+  - `3`: Unsupported on current architecture / platform
+  - `4`: Prerequisite resource or dependency unavailable
+  - `5`: Configuration or validation check failure
+- **Universal Common Flags:**
+  - `--help`, `-h`: Contextual command usage synopsis
+  - `--version`, `-V`: Command and kernel build versioning
+  - `--format <text|json>` / `--format=json`: Machine-readable output formatting
+  - `--verbose`: Detailed diagnostic output
+  - `--quiet`: Suppressed diagnostic chatter
+  - `--dry-run`: Non-destructive preview for modifying operations
+
+### 2. High-Value System Diagnostics
+- `esys` (alias `sysinfo`): Unified system diagnostics summary (CPU, Memory, VFS, Paging, Tasking).
+- `einfo`: Compact system overview and hardware architecture summary.
+- `emem` (aliases `meminfo`, `free`): Physical frames (PMM) and kernel heap dynamic allocator statistics.
+- `eproc` (alias `ps`): Process table and preemptive scheduler task overview.
+- `eclock` (aliases `date`, `time`, `clock`): Hardware CMOS Real-Time Clock readout with BCD decoding.
+- `euptime` (alias `uptime`): PIT tick-accurate system uptime.
+- `ever` (alias `version`): Kernel release version and toolchain provenance.
+- `edrv`: Enumerated active kernel drivers and bus subsystems.
+- `epci` (alias `lspci`): Discovered PCI configuration space devices.
+- `eusb` (alias `lsusb`): Enumerated USB host controllers and connected descriptors.
+- `echeck` (aliases `ehealth`, `health`): Kernel subsystem integrity self-test engine.
+- `elog`: Circular in-memory kernel ring-buffer log inspection.
+- `ediag` (alias `diag`): Deep diagnostic telemetry report.
+- `cursor` (alias `cur`): Display status or toggle terminal text cursor and mouse pointer visibility (`cursor [on|off|status|mouse <on|off>|text <on|off>]`). Both cursors are disabled by default for a clean, distraction-free server console.
+
+### 3. Read-Only Storage Diagnostics & File Utilities
+- `eblock` (alias `lsblk`): Block storage controller and sector diagnostics.
+- `epart` (alias `fdisk`): MBR / GPT partition layout inspector.
+- `efsck`: Read-only structural validator for EternalFS disk structures.
+- `edisk` (alias `df`): Mounted filesystem capacity and inode utilization.
+- `eio` (alias `iobench`): Block storage throughput and benchmark validator.
+- `emount` (aliases `mount`, `vfsinfo`): Virtual filesystem mount topology.
+- Filesystem Utilities: `mkdir`, `touch`, `cp`, `rm`, `mv`, `du`, `grep`, `find`, `cat`, `ls`, `pwd`, `stat`, `head`, `tail`, `wc` with strict read-only safety preventing accidental writes to `/disk`.
+
+### 4. Layered Cisco/Unix Network Diagnostics
+- `enet` (alias `ifconfig`): Network interface link status, MAC address, and RX/TX counters.
+- `ip`: IP configuration and interface address binding.
+- `eroute` (alias `route`): Kernel IPv4 routing table.
+- `earp` (alias `arp`): Dynamic ARP neighbor cache inspection.
+- `esocket` (aliases `netstat`, `ss`, `eport`): Active listening and established TCP sockets.
+- `ping` (alias `eping`): Live ICMP Echo Request diagnostics.
+- `dns` (aliases `edns`, `nslookup`): Live UDP DNS query resolution.
+- `dhcp` (alias `edhcp`): DHCP client discovery and lease status.
+- `tcp` (aliases `etcp`, `nc`): Raw TCP handshake and connection validator.
+
+### 5. Native Service Manager (`eservice` / `systemctl` / `service`)
+- State machine tracking: `Stopped`, `Starting`, `Running`, `Stopping`, `Failed`.
+- Built-in daemon registry: `web`, `dhcp-client`, `dns-resolver`, `console`, `shell`.
+- Command actions: `eservice list`, `eservice status <name>`, `eservice start <name>`, `eservice stop <name>`, `eservice restart <name>`, `eservice logs <name>`.
+- Circular ring-buffer log tracking per service.
+
+### 6. Embedded Lightweight Web Server Workload (`eweb` / `httpd`)
+- Bounded HTTP server daemon running on TCP port 80 (configurable via `--port <p>`).
+- Built-in endpoints:
+  - `GET /` & `GET /index.html`: Responsive EternalOS purple dashboard card.
+  - `GET /health`: JSON liveness probe (`{"status":"healthy",...}`).
+  - `GET /api/status`: JSON dynamic telemetry (`uptime_seconds`, architecture, system status).
+  - `GET /esys`: System architecture metadata.
+  - `404 Not Found`: Bounded error response for unmapped paths.
+- Standalone step mode (`eweb --step`) and interactive daemon execution (`eweb --run`).
+
+### 7. Run Automated ECS & Server Ecosystem Tests
+```powershell
+.\run.ps1 -Headless -Feature test-ecs
+```
+Verifies exit codes, parser flags, capability gating, service lifecycle, HTTP routing, VFS read-only integrity, and diagnostic sensors.
+

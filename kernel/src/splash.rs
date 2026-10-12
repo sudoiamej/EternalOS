@@ -87,6 +87,56 @@ pub fn init() {
         // 4. Initial progress bar frame
         draw_progress(fb, 5, "Initializing Kernel Environment...");
     });
+
+    pause_stage(250);
+}
+
+#[cfg(any(
+    feature = "test-ecs",
+    feature = "test-net",
+    feature = "test-usb",
+    feature = "test-shell",
+    feature = "test-userspace",
+    feature = "test-eternalfs",
+    feature = "test-vfs",
+    feature = "test-partitions",
+    feature = "test-storage",
+    feature = "test-graphics",
+    feature = "test-pci"
+))]
+pub fn pause_stage(_ms: u64) {
+    // Zero delay during automated test suites
+}
+
+#[cfg(not(any(
+    feature = "test-ecs",
+    feature = "test-net",
+    feature = "test-usb",
+    feature = "test-shell",
+    feature = "test-userspace",
+    feature = "test-eternalfs",
+    feature = "test-vfs",
+    feature = "test-partitions",
+    feature = "test-storage",
+    feature = "test-graphics",
+    feature = "test-pci"
+)))]
+pub fn pause_stage(ms: u64) {
+    let start_tick = crate::timer::get_ticks();
+    if start_tick > 0 {
+        let needed_ticks = (ms / 10).max(1);
+        while crate::timer::get_ticks().saturating_sub(start_tick) < needed_ticks {
+            core::hint::spin_loop();
+        }
+    } else {
+        // Fallback before timer IRQ is enabled: calibrated I/O port cycle delay (~1us per io_wait)
+        let loops = ms * 1200;
+        for _ in 0..loops {
+            unsafe {
+                core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack, preserves_flags));
+            }
+        }
+    }
 }
 
 /// Update boot splash status and progress bar
@@ -102,23 +152,14 @@ pub fn update_stage(stage: BootStage, detail: Option<&str>) {
 
         draw_progress(fb, percent, message);
     });
+
+    pause_stage(220);
 }
 
 /// Finish splash display and transition into terminal console
 pub fn finish() {
-    update_stage(BootStage::Ready, Some("System Ready. Initializing Terminal..."));
-
-    // Brief delay using PIT ticks if available, or spinloop
-    let start_tick = crate::timer::get_ticks();
-    if start_tick > 0 {
-        while crate::timer::get_ticks().saturating_sub(start_tick) < 15 {
-            core::hint::spin_loop();
-        }
-    } else {
-        for _ in 0..1_000_000 {
-            core::hint::spin_loop();
-        }
-    }
+    update_stage(BootStage::Ready, Some("Kernel Startup Complete. Starting Shell..."));
+    pause_stage(350);
 
     // Switch cleanly to interactive terminal panel layout
     crate::console::init_terminal_viewport();

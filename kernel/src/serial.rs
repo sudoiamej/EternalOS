@@ -138,8 +138,139 @@ pub fn _print(args: fmt::Arguments) {
     LOCK.store(false, Ordering::Release);
 }
 
+pub const LOG_ENTRY_MSG_MAX: usize = 120;
+pub const LOG_RING_CAPACITY: usize = 64;
+
+#[derive(Clone, Copy)]
+pub struct LogEntry {
+    pub level: LogLevel,
+    pub tick: u64,
+    pub msg_len: usize,
+    pub msg: [u8; LOG_ENTRY_MSG_MAX],
+}
+
+impl LogEntry {
+    pub const fn empty() -> Self {
+        Self {
+            level: LogLevel::Info,
+            tick: 0,
+            msg_len: 0,
+            msg: [0u8; LOG_ENTRY_MSG_MAX],
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        core::str::from_utf8(&self.msg[..self.msg_len]).unwrap_or("")
+    }
+}
+
+pub struct LogRingBuffer {
+    pub entries: [LogEntry; LOG_RING_CAPACITY],
+    pub head: usize,
+    pub count: usize,
+}
+
+impl LogRingBuffer {
+    pub const fn new() -> Self {
+        Self {
+            entries: [const { LogEntry::empty() }; LOG_RING_CAPACITY],
+            head: 0,
+            count: 0,
+        }
+    }
+
+    pub fn push(&mut self, level: LogLevel, tick: u64, msg: &str) {
+        let entry = &mut self.entries[self.head];
+        entry.level = level;
+        entry.tick = tick;
+        let bytes = msg.as_bytes();
+        let len = bytes.len().min(LOG_ENTRY_MSG_MAX);
+        entry.msg[..len].copy_from_slice(&bytes[..len]);
+        entry.msg_len = len;
+
+        self.head = (self.head + 1) % LOG_RING_CAPACITY;
+        if self.count < LOG_RING_CAPACITY {
+            self.count += 1;
+        }
+    }
+}
+
+static mut LOG_BUFFER: LogRingBuffer = LogRingBuffer::new();
+static LOG_LOCK: AtomicBool = AtomicBool::new(false);
+
+struct LogFormatter<'a> {
+    buf: &'a mut [u8],
+    len: usize,
+}
+
+impl<'a> fmt::Write for LogFormatter<'a> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let bytes = s.as_bytes();
+        let remaining = self.buf.len().saturating_sub(self.len);
+        let to_copy = bytes.len().min(remaining);
+        self.buf[self.len..self.len + to_copy].copy_from_slice(&bytes[..to_copy]);
+        self.len += to_copy;
+        Ok(())
+    }
+}
+
 pub fn log(level: LogLevel, args: fmt::Arguments) {
     _print(format_args!("{} {}\n", level.as_str(), args));
+
+    // Also capture into circular log buffer for elog / diagnostics
+    let mut spin_count = 0usize;
+    while LOG_LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+        spin_count += 1;
+        if spin_count > 100_000 {
+            return;
+        }
+    }
+
+    let mut msg_buf = [0u8; LOG_ENTRY_MSG_MAX];
+    let mut formatter = LogFormatter {
+        buf: &mut msg_buf,
+        len: 0,
+    };
+    let _ = formatter.write_fmt(args);
+    let msg_str = core::str::from_utf8(&formatter.buf[..formatter.len]).unwrap_or("");
+    let tick = crate::timer::get_ticks();
+
+    unsafe {
+        #[expect(static_mut_refs)]
+        LOG_BUFFER.push(level, tick, msg_str);
+    }
+
+    LOG_LOCK.store(false, Ordering::Release);
+}
+
+pub fn for_each_log<F: FnMut(&LogEntry)>(mut f: F) {
+    let mut spin_count = 0usize;
+    while LOG_LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+        spin_count += 1;
+        if spin_count > 100_000 {
+            return;
+        }
+    }
+
+    unsafe {
+        #[expect(static_mut_refs)]
+        let ring = &LOG_BUFFER;
+        if ring.count > 0 {
+            let start = if ring.count < LOG_RING_CAPACITY {
+                0
+            } else {
+                ring.head
+            };
+            for i in 0..ring.count {
+                let idx = (start + i) % LOG_RING_CAPACITY;
+                f(&ring.entries[idx]);
+            }
+        }
+    }
+
+    LOG_LOCK.store(false, Ordering::Release);
 }
 
 #[macro_export]

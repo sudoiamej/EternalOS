@@ -451,3 +451,21 @@ where
     let mut guard = VIRTIO_DEV.lock();
     guard.as_mut().map(f)
 }
+
+/// Safely read sectors from global VirtIO block device
+pub fn read_sectors_global(start_sector: u64, sector_count: u32, buf: &mut [u8]) -> Result<(), BlockError> {
+    let mut guard = VIRTIO_DEV.lock();
+    match guard.as_mut() {
+        Some(dev) => dev.read_sectors(start_sector, sector_count, buf),
+        None => Err(BlockError::NotReady),
+    }
+}
+
+/// Safely write sectors to global VirtIO block device
+pub fn write_sectors_global(start_sector: u64, sector_count: u32, buf: &[u8]) -> Result<(), BlockError> {
+    let mut guard = VIRTIO_DEV.lock();
+    match guard.as_mut() {
+        Some(dev) => dev.write_sectors(start_sector, sector_count, buf),
+        None => Err(BlockError::NotReady),
+    }
+}

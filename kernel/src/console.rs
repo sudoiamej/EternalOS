@@ -20,6 +20,8 @@ pub enum ConsoleKey {
     Right,
     Home,
     End,
+    Escape,
+    Ctrl(u8), // e.g. b's' for Ctrl+S, b'q' for Ctrl+Q, b'x' for Ctrl+X
 }
 
 /// A single row of characters in the terminal scrollback buffer
@@ -222,7 +224,7 @@ pub fn init_terminal_viewport() {
         con.min_x = panel_x + 20;
         con.min_y = panel_y + 44;
         con.max_x = panel_x + panel_w - 20;
-        con.max_y = panel_y + panel_h - 16;
+        con.max_y = con.min_y + (TERM_ROWS * 18);
         con.cursor_x = con.min_x;
         con.cursor_y = con.min_y;
         con.in_terminal_panel = true;
@@ -308,6 +310,75 @@ fn render_footer_bar(fb: &crate::framebuffer::Framebuffer, scroll_offset: usize)
     fb.draw_text(info_x, footer_y + 8, fb_info, Color::ACCENT_LAVENDER, None);
 }
 
+/// Lightweight update of live indicators (Clock, Uptime, Net) without touching terminal text
+pub fn update_live_indicators() {
+    with_framebuffer(|fb| {
+        let con = CONSOLE.lock();
+        if !con.in_terminal_panel || fb.width < 640 || fb.height < 480 {
+            return;
+        }
+
+        let panel_x = 40;
+        let panel_y = 20;
+        let panel_w = fb.width - 80;
+
+        // 1. Refresh live network status indicator
+        let (net_status_text, net_color) = crate::net::with_network_stack(|stack| {
+            if let Some(ref dev) = stack.device {
+                if dev.is_link_up() {
+                    if !stack.config.ip.is_unspecified() && !stack.config.gateway.is_unspecified() {
+                        ("[NET: CONNECTED]", Color::SUCCESS_GREEN)
+                    } else {
+                        ("[NET: NO INTERNET]", Color::WARN_AMBER)
+                    }
+                } else {
+                    ("[NET: DISCONNECTED]", Color::ERROR_RED)
+                }
+            } else {
+                ("[NET: NO DEVICE]", Color::TEXT_MUTED)
+            }
+        });
+
+        let net_x = panel_x + 300;
+        fb.fill_rect(Rect::new(net_x, panel_y + 10, 160, 18), Color::PANEL_BG);
+        fb.draw_text(net_x, panel_y + 12, net_status_text, net_color, None);
+
+        // 2. Refresh live RTC date/time indicator
+        let dt = crate::rtc::read_datetime();
+        let mut time_buf = [0u8; 32];
+        let time_str = dt.format_iso(&mut time_buf);
+
+        let time_x = (panel_x + panel_w).saturating_sub(200);
+        fb.fill_rect(Rect::new(time_x, panel_y + 10, 190, 18), Color::PANEL_BG);
+        fb.draw_text(time_x, panel_y + 12, time_str, Color::TEXT_MUTED, None);
+
+        // 3. Refresh live uptime in footer bar
+        let footer_y = fb.height - 32;
+        let ticks = crate::timer::get_ticks();
+        let total_secs = ticks / 100;
+        let mins = total_secs / 60;
+        let secs = total_secs % 60;
+
+        let mut uptime_buf = [0u8; 32];
+        uptime_buf[0] = b'U';
+        uptime_buf[1] = b'p';
+        uptime_buf[2] = b':';
+        uptime_buf[3] = b' ';
+        uptime_buf[4] = b'0' + ((mins / 10) % 10) as u8;
+        uptime_buf[5] = b'0' + (mins % 10) as u8;
+        uptime_buf[6] = b'm';
+        uptime_buf[7] = b' ';
+        uptime_buf[8] = b'0' + ((secs / 10) % 10) as u8;
+        uptime_buf[9] = b'0' + (secs % 10) as u8;
+        uptime_buf[10] = b's';
+        let up_str = core::str::from_utf8(&uptime_buf[..11]).unwrap_or("Up: 00m 00s");
+
+        let right_info_x = fb.width.saturating_sub(380);
+        fb.fill_rect(Rect::new(right_info_x, footer_y + 4, 120, 20), Color::PANEL_BG);
+        fb.draw_text(right_info_x, footer_y + 8, up_str, Color::TEXT_MUTED, None);
+    });
+}
+
 /// Clear console display on framebuffer and serial terminal
 pub fn console_clear() {
     // 1. ANSI clear sequence for serial terminal
@@ -383,6 +454,13 @@ fn redraw_viewport_locked(fb: &crate::framebuffer::Framebuffer, con: &ConsoleSta
             // Unused row: clear row area
             fb.fill_rect(Rect::new(con.min_x, draw_y, con.max_x - con.min_x, 18), Color::PANEL_BG);
         }
+    }
+
+    // Clear any extra padding space between the bottom of the last terminal row and the footer bar
+    let bottom_y = con.min_y + (TERM_ROWS * 18);
+    let footer_y = fb.height.saturating_sub(32);
+    if bottom_y < footer_y {
+        fb.fill_rect(Rect::new(panel_x + 2, bottom_y, panel_w - 4, footer_y - bottom_y), Color::PANEL_BG);
     }
 }
 
@@ -485,8 +563,27 @@ pub fn console_write(s: &str) {
     }
 }
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
+/// Controls whether the terminal text underline cursor is rendered
+pub static TEXT_CURSOR_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_text_cursor_enabled(enabled: bool) {
+    TEXT_CURSOR_ENABLED.store(enabled, Ordering::SeqCst);
+    if !enabled {
+        draw_text_cursor(false);
+    }
+}
+
+pub fn is_text_cursor_enabled() -> bool {
+    TEXT_CURSOR_ENABLED.load(Ordering::SeqCst)
+}
+
 /// Render or clear text cursor box at active cursor position
 pub fn draw_text_cursor(visible: bool) {
+    if visible && !TEXT_CURSOR_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     with_framebuffer(|fb| {
         let con = CONSOLE.lock();
         if con.scrollback.is_scrolled() {
@@ -521,13 +618,50 @@ pub fn console_read_input() -> Option<ConsoleKey> {
 
     // 1. Check structured input event queue from PS/2 keyboard IRQ1
     while let Some(ev) = poll_event() {
-        if let InputEvent::KeyDown { key, ascii, .. } = ev {
+        if let InputEvent::KeyDown { key, modifiers, ascii } = ev {
             // If this event has an ASCII character, discard the corresponding mirrored character in CHAR_QUEUE
             if ascii.is_some() {
                 let _ = pop_char();
             }
 
+            // Check for Ctrl combination first
+            if modifiers.ctrl {
+                let ctrl_char = match key {
+                    KeyCode::A => Some(b'a'),
+                    KeyCode::B => Some(b'b'),
+                    KeyCode::C => Some(b'c'),
+                    KeyCode::D => Some(b'd'),
+                    KeyCode::E => Some(b'e'),
+                    KeyCode::F => Some(b'f'),
+                    KeyCode::G => Some(b'g'),
+                    KeyCode::H => Some(b'h'),
+                    KeyCode::I => Some(b'i'),
+                    KeyCode::J => Some(b'j'),
+                    KeyCode::K => Some(b'k'),
+                    KeyCode::L => Some(b'l'),
+                    KeyCode::M => Some(b'm'),
+                    KeyCode::N => Some(b'n'),
+                    KeyCode::O => Some(b'o'),
+                    KeyCode::P => Some(b'p'),
+                    KeyCode::Q => Some(b'q'),
+                    KeyCode::R => Some(b'r'),
+                    KeyCode::S => Some(b's'),
+                    KeyCode::T => Some(b't'),
+                    KeyCode::U => Some(b'u'),
+                    KeyCode::V => Some(b'v'),
+                    KeyCode::W => Some(b'w'),
+                    KeyCode::X => Some(b'x'),
+                    KeyCode::Y => Some(b'y'),
+                    KeyCode::Z => Some(b'z'),
+                    _ => None,
+                };
+                if let Some(ch) = ctrl_char {
+                    return Some(ConsoleKey::Ctrl(ch));
+                }
+            }
+
             match key {
+                KeyCode::Escape => return Some(ConsoleKey::Escape),
                 KeyCode::UpArrow => return Some(ConsoleKey::Up),
                 KeyCode::DownArrow => return Some(ConsoleKey::Down),
                 KeyCode::PageUp => return Some(ConsoleKey::PageUp),
@@ -547,6 +681,11 @@ pub fn console_read_input() -> Option<ConsoleKey> {
 
     // 2. Check buffered characters (for any legacy pushes not via InputEvent)
     if let Some(b) = pop_char() {
+        if b >= 1 && b <= 26 {
+            return Some(ConsoleKey::Ctrl(b + b'a' - 1));
+        } else if b == 0x1B {
+            return Some(ConsoleKey::Escape);
+        }
         return Some(ConsoleKey::Char(b));
     }
 
@@ -562,6 +701,8 @@ pub fn console_read_input() -> Option<ConsoleKey> {
                             b'B' => return Some(ConsoleKey::Down),
                             b'C' => return Some(ConsoleKey::Right),
                             b'D' => return Some(ConsoleKey::Left),
+                            b'H' => return Some(ConsoleKey::Home),
+                            b'F' => return Some(ConsoleKey::End),
                             b'5' => {
                                 let _ = SerialPort::read_byte(); // consume '~'
                                 return Some(ConsoleKey::PageUp);
@@ -576,7 +717,10 @@ pub fn console_read_input() -> Option<ConsoleKey> {
                 }
                 return Some(ConsoleKey::Char(b2));
             }
-            return Some(ConsoleKey::Char(0x1B));
+            return Some(ConsoleKey::Escape);
+        } else if b >= 1 && b <= 26 {
+            // Serial ASCII control code (Ctrl+A = 1, Ctrl+S = 19, Ctrl+Q = 17, etc.)
+            return Some(ConsoleKey::Ctrl(b + b'a' - 1));
         }
         return Some(ConsoleKey::Char(b));
     }

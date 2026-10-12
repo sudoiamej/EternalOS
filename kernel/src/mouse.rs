@@ -111,7 +111,36 @@ impl MouseDriver {
     }
 }
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 pub static MOUSE_DRIVER: SpinLock<MouseDriver> = SpinLock::new(MouseDriver::new());
+
+/// Controls whether the software mouse pointer bitmap is rendered onto the framebuffer
+pub static MOUSE_CURSOR_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_mouse_cursor_enabled(enabled: bool) {
+    let prev = MOUSE_CURSOR_ENABLED.swap(enabled, Ordering::SeqCst);
+    if prev && !enabled {
+        let mut driver = MOUSE_DRIVER.lock();
+        if driver.cursor_visible {
+            with_framebuffer(|fb| {
+                let old_x = driver.last_drawn_x;
+                let old_y = driver.last_drawn_y;
+                for r in 0..CURSOR_HEIGHT {
+                    for c in 0..CURSOR_WIDTH {
+                        let pixel_color = driver.saved_pixels[r * CURSOR_WIDTH + c];
+                        fb.put_pixel(old_x + c, old_y + r, pixel_color);
+                    }
+                }
+            });
+            driver.cursor_visible = false;
+        }
+    }
+}
+
+pub fn is_mouse_cursor_enabled() -> bool {
+    MOUSE_CURSOR_ENABLED.load(Ordering::SeqCst)
+}
 
 /// 8x8 Arrow Cursor Bitmap
 /// '.' = Transparent, 'W' = White outline, 'B' = Cyan/Blue interior
@@ -317,8 +346,10 @@ pub fn process_mouse_byte(byte: u8) {
             post_event(ev);
         }
 
-        // Redraw mouse cursor on framebuffer
-        draw_cursor(&mut driver, abs_x, abs_y);
+        // Redraw mouse cursor on framebuffer only if explicitly enabled
+        if MOUSE_CURSOR_ENABLED.load(Ordering::Relaxed) {
+            draw_cursor(&mut driver, abs_x, abs_y);
+        }
     }
 }
 

@@ -80,6 +80,14 @@ pub mod usb;
 #[cfg(feature = "test-usb")]
 pub mod usb_tests;
 pub mod lifecycle;
+pub mod ecs;
+pub mod service;
+pub mod web;
+pub mod calc;
+pub mod editor;
+pub mod notepad;
+#[cfg(feature = "test-ecs")]
+pub mod ecs_tests;
 
 #[used]
 #[unsafe(link_section = ".requests")]
@@ -150,6 +158,7 @@ unsafe extern "C" fn kmain() -> ! {
 
     // 11. Initialize Virtual Filesystem (VFS) with root RamFs
     vfs::init();
+    vfs::auto_mount_storage();
     splash::update_stage(splash::BootStage::StorageAndVfs, Some("VirtIO Block Storage & VFS Mounted (55%)"));
 
     // 12. Initialize Hardware Timer (8254 PIT at 100 Hz = 10ms quantum)
@@ -174,6 +183,10 @@ unsafe extern "C" fn kmain() -> ! {
     splash::update_stage(splash::BootStage::NetworkAndUsb, Some("Intel E1000 & USB Controllers Active (90%)"));
 
     // 16. Test Hooks
+    #[cfg(feature = "test-ecs")]
+    {
+        ecs_tests::run_ecs_tests();
+    }
     #[cfg(feature = "test-usb")]
     {
         usb_tests::run_usb_tests();
@@ -359,7 +372,8 @@ unsafe extern "C" fn kmain() -> ! {
         feature = "test-panic",
         feature = "test-input",
         feature = "test-net",
-        feature = "test-usb"
+        feature = "test-usb",
+        feature = "test-ecs"
     )))]
     {
         // 17. Finish boot splash and transition cleanly to interactive terminal panel

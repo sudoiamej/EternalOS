@@ -1,4 +1,5 @@
 use crate::sync::SpinLock;
+use crate::vfs::mount::{find_mount, volume_read, volume_readdir, volume_stat};
 use crate::vfs::path::{normalize_path, PathComponentIterator};
 use crate::vfs::ramfs::RamFs;
 use crate::vfs::{
@@ -14,6 +15,7 @@ pub struct OpenFileEntry {
     pub inode: InodeId,
     pub offset: u64,
     pub flags: OpenFlags,
+    pub mount_idx: Option<usize>,
 }
 
 impl OpenFileEntry {
@@ -24,6 +26,7 @@ impl OpenFileEntry {
             inode: 0,
             offset: 0,
             flags: OpenFlags::READ_ONLY,
+            mount_idx: None,
         }
     }
 }
@@ -89,6 +92,7 @@ impl VfsRouter {
         self.mounts
             .iter()
             .any(|m| m.in_use && m.path_as_str() == path)
+            || find_mount(path).is_some()
     }
 
     /// Resolve an absolute path into an InodeId on the root filesystem.
@@ -119,7 +123,36 @@ impl VfsRouter {
             return Err(VfsError::IsADirectory);
         }
 
-        // Resolve or create file
+        // Check if path routes to a mounted volume
+        if let Some((vol_idx, subpath)) = find_mount(canon_str) {
+            if flags.write || flags.create || flags.truncate || flags.append {
+                return Err(VfsError::PermissionDenied);
+            }
+
+            let meta = volume_stat(vol_idx, subpath)?;
+            if meta.node_type == NodeType::Directory {
+                return Err(VfsError::IsADirectory);
+            }
+
+            for (fd, slot) in self.open_files.iter_mut().enumerate() {
+                if !slot.in_use {
+                    slot.in_use = true;
+                    slot.generation = slot.generation.wrapping_add(1);
+                    slot.inode = meta.inode;
+                    slot.offset = 0;
+                    slot.flags = flags;
+                    slot.mount_idx = Some(vol_idx);
+
+                    return Ok(FileHandle {
+                        fd,
+                        generation: slot.generation,
+                    });
+                }
+            }
+            return Err(VfsError::TableOverflow);
+        }
+
+        // Fallback to root RamFs
         let inode = match self.resolve_path(canon_str) {
             Ok(in_id) => {
                 let meta = self.root_fs.get_metadata(in_id)?;
@@ -136,7 +169,6 @@ impl VfsRouter {
                     return Err(VfsError::NotFound);
                 }
 
-                // Split into parent directory path and file basename
                 let last_slash = canon_str.rfind('/').ok_or(VfsError::InvalidPath)?;
                 let parent_path = if last_slash == 0 { "/" } else { &canon_str[..last_slash] };
                 let filename = &canon_str[last_slash + 1..];
@@ -147,7 +179,6 @@ impl VfsRouter {
             Err(e) => return Err(e),
         };
 
-        // Allocate slot in open file table
         for (fd, slot) in self.open_files.iter_mut().enumerate() {
             if !slot.in_use {
                 slot.in_use = true;
@@ -159,6 +190,7 @@ impl VfsRouter {
                     0
                 };
                 slot.flags = flags;
+                slot.mount_idx = None;
 
                 return Ok(FileHandle {
                     fd,
@@ -170,7 +202,6 @@ impl VfsRouter {
         Err(VfsError::TableOverflow)
     }
 
-    /// Validate and return mutable handle entry.
     fn get_open_file(&self, handle: FileHandle) -> Result<&OpenFileEntry, VfsError> {
         if handle.fd >= MAX_OPEN_FILES {
             return Err(VfsError::InvalidHandle);
@@ -201,8 +232,13 @@ impl VfsRouter {
         }
         let inode = entry.inode;
         let offset = entry.offset;
+        let mount_idx = entry.mount_idx;
 
-        let bytes_read = self.root_fs.read(inode, offset, buf)?;
+        let bytes_read = match mount_idx {
+            Some(vol_idx) => volume_read(vol_idx, inode, offset, buf)?,
+            None => self.root_fs.read(inode, offset, buf)?,
+        };
+
         let entry_mut = self.get_open_file_mut(handle)?;
         entry_mut.offset = entry_mut
             .offset
@@ -216,6 +252,9 @@ impl VfsRouter {
     pub fn write(&mut self, handle: FileHandle, buf: &[u8]) -> Result<usize, VfsError> {
         let entry = self.get_open_file(handle)?;
         if !entry.flags.write {
+            return Err(VfsError::PermissionDenied);
+        }
+        if entry.mount_idx.is_some() {
             return Err(VfsError::PermissionDenied);
         }
         let inode = entry.inode;
@@ -248,6 +287,10 @@ impl VfsRouter {
             return Err(VfsError::AlreadyExists);
         }
 
+        if find_mount(canon_str).is_some() {
+            return Err(VfsError::PermissionDenied);
+        }
+
         let last_slash = canon_str.rfind('/').ok_or(VfsError::InvalidPath)?;
         let parent_path = if last_slash == 0 { "/" } else { &canon_str[..last_slash] };
         let dirname = &canon_str[last_slash + 1..];
@@ -259,17 +302,59 @@ impl VfsRouter {
 
     /// Enumerate directory entries at `path`.
     pub fn readdir(&self, path: &str, offset: usize, out: &mut [DirEntry]) -> Result<usize, VfsError> {
-        let inode = self.resolve_path(path)?;
+        let mut canon_buf = [0u8; MAX_PATH_LEN];
+        let len = normalize_path(path, &mut canon_buf)?;
+        let canon_str = core::str::from_utf8(&canon_buf[..len]).map_err(|_| VfsError::InvalidPath)?;
+
+        // If path is on a mounted volume
+        if let Some((vol_idx, subpath)) = find_mount(canon_str) {
+            return volume_readdir(vol_idx, subpath, offset, out);
+        }
+
+        let inode = self.resolve_path(canon_str)?;
         let meta = self.root_fs.get_metadata(inode)?;
         if meta.node_type != NodeType::Directory {
             return Err(VfsError::NotADirectory);
         }
-        self.root_fs.readdir(inode, offset, out)
+        let count = self.root_fs.readdir(inode, offset, out)?;
+
+        // If reading root "/", synthesize entries for active volume mounts if not present
+        if canon_str == "/" && offset == 0 && count < out.len() {
+            let mut current_cnt = count;
+            crate::vfs::mount::for_each_mount(|mnt| {
+                let mnt_path = mnt.mount_path_str();
+                if mnt_path.starts_with('/') && !mnt_path[1..].contains('/') {
+                    let top_name = &mnt_path[1..];
+                    let already_exists = out[..current_cnt].iter().any(|e| e.name_as_str() == top_name);
+                    if !already_exists && current_cnt < out.len() {
+                        let mut entry = DirEntry::empty();
+                        let n_bytes = top_name.as_bytes();
+                        entry.name_len = n_bytes.len().min(crate::vfs::MAX_NAME_LEN);
+                        entry.name[..entry.name_len].copy_from_slice(&n_bytes[..entry.name_len]);
+                        entry.node_type = NodeType::Directory;
+                        entry.inode = 9999 + current_cnt as u64;
+                        out[current_cnt] = entry;
+                        current_cnt += 1;
+                    }
+                }
+            });
+            return Ok(current_cnt);
+        }
+
+        Ok(count)
     }
 
     /// Retrieve metadata for `path`.
     pub fn stat(&self, path: &str) -> Result<Metadata, VfsError> {
-        let inode = self.resolve_path(path)?;
+        let mut canon_buf = [0u8; MAX_PATH_LEN];
+        let len = normalize_path(path, &mut canon_buf)?;
+        let canon_str = core::str::from_utf8(&canon_buf[..len]).map_err(|_| VfsError::InvalidPath)?;
+
+        if let Some((vol_idx, subpath)) = find_mount(canon_str) {
+            return volume_stat(vol_idx, subpath);
+        }
+
+        let inode = self.resolve_path(canon_str)?;
         self.root_fs.get_metadata(inode)
     }
 
@@ -281,6 +366,10 @@ impl VfsRouter {
 
         if canon_str == "/" {
             return Err(VfsError::InvalidArgument);
+        }
+
+        if find_mount(canon_str).is_some() {
+            return Err(VfsError::PermissionDenied);
         }
 
         let last_slash = canon_str.rfind('/').ok_or(VfsError::InvalidPath)?;
