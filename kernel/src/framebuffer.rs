@@ -218,7 +218,7 @@ impl Framebuffer {
         self.fill_rect(Rect::new(0, 0, self.width, self.height), color);
     }
 
-    /// Draw a filled rectangle with coordinate clipping and row-linear writes
+    /// Draw a filled rectangle with coordinate clipping and accelerated 64-bit row-linear writes
     pub fn fill_rect(&self, rect: Rect, color: Color) {
         let x_start = rect.x.min(self.width);
         let x_end = (rect.x + rect.width).min(self.width);
@@ -231,6 +231,7 @@ impl Framebuffer {
 
         let pixel_val = self.format.pack_u32(color);
         let span_len = x_end - x_start;
+        let pixel_pair = (pixel_val as u64) | ((pixel_val as u64) << 32);
 
         for y in y_start..y_end {
             let row_offset = match y.checked_mul(self.pitch) {
@@ -243,9 +244,26 @@ impl Framebuffer {
             if end_offset <= self.buffer_len {
                 unsafe {
                     let mut ptr = self.virt_base.add(start_offset).cast::<u32>();
-                    for _ in 0..span_len {
+                    let mut remaining = span_len;
+
+                    // If not 8-byte aligned, write leading 32-bit pixel
+                    if (ptr as usize) & 0x7 != 0 && remaining > 0 {
                         write_volatile(ptr, pixel_val);
                         ptr = ptr.add(1);
+                        remaining -= 1;
+                    }
+
+                    // Bulk write 64-bit pairs (2 pixels per bus cycle)
+                    let u64_count = remaining / 2;
+                    let mut ptr64 = ptr.cast::<u64>();
+                    for _ in 0..u64_count {
+                        write_volatile(ptr64, pixel_pair);
+                        ptr64 = ptr64.add(1);
+                    }
+
+                    // Write trailing pixel if odd count
+                    if (remaining & 1) != 0 {
+                        write_volatile(ptr64.cast::<u32>(), pixel_val);
                     }
                 }
             }

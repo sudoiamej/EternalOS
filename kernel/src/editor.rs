@@ -260,8 +260,13 @@ impl TextEditor {
     pub fn run(&mut self) {
         self.load_file();
 
+        let mut needs_redraw = true;
+
         loop {
-            self.render();
+            if needs_redraw {
+                self.render();
+                needs_redraw = false;
+            }
 
             let key = match console_read_input() {
                 Some(k) => k,
@@ -270,6 +275,8 @@ impl TextEditor {
                     continue;
                 }
             };
+
+            needs_redraw = true;
 
             match key {
                 ConsoleKey::Ctrl(b'q') => {

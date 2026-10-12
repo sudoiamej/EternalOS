@@ -619,10 +619,8 @@ pub fn console_read_input() -> Option<ConsoleKey> {
     // 1. Check structured input event queue from PS/2 keyboard IRQ1
     while let Some(ev) = poll_event() {
         if let InputEvent::KeyDown { key, modifiers, ascii } = ev {
-            // If this event has an ASCII character, discard the corresponding mirrored character in CHAR_QUEUE
-            if ascii.is_some() {
-                let _ = pop_char();
-            }
+            // Drain mirrored characters in CHAR_QUEUE for this keystroke
+            while pop_char().is_some() {}
 
             // Check for Ctrl combination first
             if modifiers.ctrl {
@@ -679,7 +677,7 @@ pub fn console_read_input() -> Option<ConsoleKey> {
         }
     }
 
-    // 2. Check buffered characters (for any legacy pushes not via InputEvent)
+    // 2. Check buffered characters (only if not an event)
     if let Some(b) = pop_char() {
         if b >= 1 && b <= 26 {
             return Some(ConsoleKey::Ctrl(b + b'a' - 1));

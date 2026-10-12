@@ -220,8 +220,13 @@ impl NotepadApp {
     pub fn run(&mut self) {
         self.load_file();
 
+        let mut needs_redraw = true;
+
         loop {
-            self.render();
+            if needs_redraw {
+                self.render();
+                needs_redraw = false;
+            }
 
             let key = match console_read_input() {
                 Some(k) => k,
@@ -230,6 +235,8 @@ impl NotepadApp {
                     continue;
                 }
             };
+
+            needs_redraw = true;
 
             match key {
                 ConsoleKey::Ctrl(b'q') | ConsoleKey::Escape => {
@@ -255,7 +262,10 @@ impl NotepadApp {
                 ConsoleKey::Char(ch) => {
                     self.insert_char(ch);
                 }
-                _ => {}
+                _ => {
+                    // Unknown key, avoid unnecessary redraw
+                    needs_redraw = false;
+                }
             }
         }
 
