@@ -241,12 +241,12 @@ fn test_scrollback_buffer() {
     let line = sb.get_line_from_bottom(0).expect("Should have bottom line");
     assert_eq!(&line.chars[..line.len], b"Hello Scrollback");
 
-    // Add multiple lines exceeding TERM_ROWS (24)
-    for i in 0..30 {
+    // Add multiple lines exceeding TERM_ROWS (36)
+    for i in 0..45 {
         sb.newline();
         sb.push_char(b'0' + (i % 10) as u8);
     }
-    assert_eq!(sb.count, 31);
+    assert_eq!(sb.count, 46);
 
     // Initial scroll offset is 0
     assert_eq!(sb.scroll_offset, 0);
@@ -257,13 +257,13 @@ fn test_scrollback_buffer() {
     assert_eq!(sb.scroll_offset, 5);
     assert!(sb.is_scrolled());
 
-    // Scroll up beyond capacity (clamped to count - TERM_ROWS = 31 - 24 = 7)
-    sb.scroll_up(20);
-    assert_eq!(sb.scroll_offset, 7);
+    // Scroll up beyond capacity (clamped to count - TERM_ROWS = 46 - 36 = 10)
+    sb.scroll_up(30);
+    assert_eq!(sb.scroll_offset, 10);
 
-    // Scroll down by 3 lines
+    // Scroll down by 3 lines (10 - 3 = 7)
     sb.scroll_down(3);
-    assert_eq!(sb.scroll_offset, 4);
+    assert_eq!(sb.scroll_offset, 7);
 
     // Reset scroll back to live bottom view
     sb.reset_scroll();

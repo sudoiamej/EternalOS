@@ -3,7 +3,7 @@ use crate::framebuffer::{with_framebuffer, Color, Rect};
 use crate::sync::SpinLock;
 use crate::input::{poll_event, pop_char, InputEvent, KeyCode};
 
-pub const TERM_ROWS: usize = 24;
+pub const TERM_ROWS: usize = 36;
 pub const TERM_COLS: usize = 120;
 pub const SCROLLBACK_CAPACITY: usize = 128;
 
@@ -174,9 +174,9 @@ impl ConsoleState {
     pub const fn new() -> Self {
         Self {
             cursor_x: 60,
-            cursor_y: 298,
+            cursor_y: 64,
             min_x: 60,
-            min_y: 298,
+            min_y: 64,
             max_x: 1200,
             max_y: 730,
             in_terminal_panel: false,
@@ -203,7 +203,7 @@ pub fn init_terminal_viewport() {
         }
 
         let panel_x = 40;
-        let panel_y = 254;
+        let panel_y = 20;
         let panel_w = fb.width - 80;
         let panel_h = fb.height - panel_y - 48;
 
@@ -258,7 +258,7 @@ pub fn console_clear() {
 
         if con.in_terminal_panel && fb.width >= 640 && fb.height >= 480 {
             let panel_x = 40;
-            let panel_y = 254;
+            let panel_y = 20;
             let panel_w = fb.width - 80;
             let content_y = panel_y + 36;
             let content_h = fb.height - content_y - 52;

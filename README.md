@@ -57,6 +57,31 @@ To build and run EternalOS locally, ensure the following host tools are installe
 
 ---
 
+## 🚀 Booting on Real Bare-Metal Hardware
+
+EternalOS is engineered as a standard UEFI x86-64 operating system using the Limine bootloader protocol. You can run it directly on real PC hardware (Intel or AMD x86-64 systems with UEFI firmware):
+
+### Option A: Direct FAT32 USB Flash Drive (Recommended)
+1. Format any standard USB flash drive as **FAT32** (using Windows Disk Management, File Explorer, or `diskpart`).
+2. Run the bare-metal USB generator script:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\tools\make_usb.ps1
+   ```
+3. Copy the staged boot files onto your USB drive:
+   - Copy `boot\BOOTX64.EFI` to `E:\EFI\BOOT\BOOTX64.EFI`
+   - Copy `boot\limine.conf` to `E:\boot\limine\limine.conf`
+   - Copy the compiled kernel `eternal_kernel` to `E:\boot\eternal_kernel`
+4. Plug the USB flash drive into your physical PC.
+5. Power on and press your motherboard's boot menu key (**F12**, **F11**, **F8**, or **Del**).
+6. Select your USB drive under **UEFI Boot Devices** (ensure Secure Boot is disabled if custom keys are not enrolled).
+
+### Option B: Raw Disk Image via Rufus
+1. Run `.\tools\make_usb.ps1` to generate `build\eternalos_boot.img`.
+2. Open **Rufus** ([https://rufus.ie](https://rufus.ie)).
+3. Select your USB drive and choose `build\eternalos_boot.img` in "DD Image" mode to flash it.
+
+---
+
 ## 📂 Repository Structure
 
 ```text

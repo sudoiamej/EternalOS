@@ -132,6 +132,11 @@ const CURSOR_BITMAP: [&str; 8] = [
 pub fn init() {
     crate::log_info!("[MOUSE] Initializing PS/2 Mouse via i8042 auxiliary port...");
 
+    // 0. Flush any stale bytes from controller buffer
+    while wait_read() {
+        let _ = unsafe { inb(PS2_DATA_PORT) };
+    }
+
     // 1. Enable auxiliary device (command 0xA8)
     if wait_write() {
         unsafe {
@@ -161,13 +166,23 @@ pub fn init() {
         }
     }
 
-    // 3. Set default settings (command 0xF6)
+    // 3. Reset mouse to default settings (command 0xF6)
     mouse_write(0xF6);
     let _ = mouse_read(); // ACK (0xFA)
+
+    // Drain any remaining responses
+    while wait_read() {
+        let _ = unsafe { inb(PS2_DATA_PORT) };
+    }
 
     // 4. Enable data reporting (command 0xF4)
     mouse_write(0xF4);
     let _ = mouse_read(); // ACK (0xFA)
+
+    // Drain any remaining responses before unmasking IRQ
+    while wait_read() {
+        let _ = unsafe { inb(PS2_DATA_PORT) };
+    }
 
     // 5. Unmask IRQ12 on Slave PIC (and cascade IRQ2)
     unmask_irq(12);
@@ -241,6 +256,10 @@ pub fn process_mouse_byte(byte: u8) {
             rel_y |= !0xFF;
         }
         rel_y = -rel_y;
+
+        // Clamp extreme jumps caused by glitchy packets or host cursor capture shifts
+        rel_x = rel_x.clamp(-127, 127);
+        rel_y = rel_y.clamp(-127, 127);
 
         // Button states
         let left = (b0 & 0x01) != 0;
