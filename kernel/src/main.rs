@@ -77,6 +77,7 @@ pub mod net_tests;
 pub mod usb;
 #[cfg(feature = "test-usb")]
 pub mod usb_tests;
+pub mod lifecycle;
 
 #[used]
 #[unsafe(link_section = ".requests")]

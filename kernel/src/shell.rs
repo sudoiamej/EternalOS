@@ -83,7 +83,7 @@ pub const COMMAND_REGISTRY: &[CommandDef] = &[
         name: "exit",
         aliases: &["quit"],
         category: CommandCategory::Shell,
-        summary: "Exit interactive shell",
+        summary: "Leave the current shell when supported",
         usage: "exit",
     },
 
@@ -229,6 +229,20 @@ pub const COMMAND_REGISTRY: &[CommandDef] = &[
         category: CommandCategory::System,
         summary: "Display system uptime and PIT timer ticks",
         usage: "uptime",
+    },
+    CommandDef {
+        name: "shutdown",
+        aliases: &["poweroff"],
+        category: CommandCategory::System,
+        summary: "Request a safe system shutdown",
+        usage: "shutdown",
+    },
+    CommandDef {
+        name: "reboot",
+        aliases: &["restart"],
+        category: CommandCategory::System,
+        summary: "Restart the system",
+        usage: "reboot",
     },
 
     // --- Hardware & Devices ---
@@ -417,7 +431,9 @@ pub fn execute_command(line: &str, ctx: &mut ShellContext) -> i32 {
         }
         "which" => cmd_which(&args),
         "alias" => cmd_alias(),
-        "exit" => -1,
+        "exit" => cmd_exit(&args),
+        "shutdown" => cmd_shutdown(&args),
+        "reboot" => cmd_reboot(&args),
 
         "pwd" => {
             console_write(ctx.cwd_str());
@@ -630,6 +646,35 @@ fn cmd_alias() -> i32 {
         }
     }
     0
+}
+
+fn cmd_exit(args: &ParsedArgs) -> i32 {
+    if args.len() > 1 {
+        console_write("exit: unexpected arguments (usage: exit)\r\n");
+        return 1;
+    }
+    // EternalOS boots directly into the root supervisor system shell.
+    // Child userspace shell processes are not yet spawned as sub-shells.
+    crate::lifecycle::handle_exit(true);
+    0
+}
+
+fn cmd_shutdown(args: &ParsedArgs) -> i32 {
+    if args.len() > 1 {
+        console_write("shutdown: unexpected arguments (usage: shutdown)\r\n");
+        return 1;
+    }
+    console_write("Shutting down EternalOS...\r\n");
+    crate::lifecycle::execute_shutdown()
+}
+
+fn cmd_reboot(args: &ParsedArgs) -> i32 {
+    if args.len() > 1 {
+        console_write("reboot: unexpected arguments (usage: reboot)\r\n");
+        return 1;
+    }
+    console_write("Restarting EternalOS...\r\n");
+    crate::lifecycle::execute_reboot()
 }
 
 fn cmd_cd(args: &ParsedArgs, ctx: &mut ShellContext) -> i32 {

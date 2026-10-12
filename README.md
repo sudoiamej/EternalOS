@@ -222,7 +222,11 @@ EternalOS/
 - **Interactive Command-Line Shell (`shell.rs` & `console.rs`):**
   - Dual-output console rendering to serial COM1 and graphical framebuffer.
   - Interactive line editor with backspace handling, character echoing, and command dispatch.
-  - Built-in commands: `help`, `clear`, `echo`, `pwd`, `ls`, `cd`, `cat`, `stat`, `uname`, `meminfo`, and `exit`.
+  - Built-in commands: `help`, `clear`, `echo`, `pwd`, `ls`, `cd`, `cat`, `stat`, `uname`, `meminfo`, `exit`, `shutdown`, `reboot`.
+- **System Lifecycle Management (`lifecycle.rs`, `shell.rs`):**
+  - `exit`: Contextual shell termination. Protects the root supervisor shell from accidental termination by displaying a notification explaining root context and directing the operator to `shutdown` or `reboot`. Terminating child shell processes is dispatched when sub-shells are active.
+  - `shutdown`: Initiates synchronized storage cache sync, disables hardware interrupts (`cli`), and issues platform power-off to QEMU ACPI / PIIX4 / Q35 power-off port (`0x604` with `0x2000`), APM port (`0xB004`), and debug exit (`0x501`). Halts CPU cleanly if unsupported by bare-metal platform.
+  - `reboot`: Synchronizes storage caches, disables interrupts, and issues platform cold reset via PCI/ACPI reset control register (`0xCF9` with `0x06`), 8042 PS/2 keyboard controller pulse reset (`0x64` with `0xFE`), and triple-fault IDT reset fallback.
 - **Deterministic Test Suite (`test-userspace`):**
   - Test 1: User segment descriptors & CPL3 configuration verification.
   - Test 2: User address space creation, higher-half kernel sharing, and lower-half user isolation.

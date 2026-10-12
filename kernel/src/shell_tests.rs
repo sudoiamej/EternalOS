@@ -31,6 +31,9 @@ pub fn run_phase_shell_tests() {
     // 7. Test Command History Navigation & Stash
     test_command_history();
 
+    // 8. Test System Lifecycle Commands (exit, shutdown, reboot argument handling & isolation)
+    test_lifecycle_commands(&mut ctx);
+
     log_info!("====================================================");
     log_info!("  ALL COMMAND SUITE TESTS COMPLETED SUCCESSFULLY!   ");
     log_info!("====================================================");
@@ -330,4 +333,58 @@ fn test_command_history() {
     assert_eq!(d4, None);
 
     log_info!("  [OK] Command history ring, deduplication, and stash restore verified.");
+}
+
+fn test_lifecycle_commands(ctx: &mut ShellContext) {
+    log_info!("[TEST 8/8] Testing System Lifecycle Commands (exit, shutdown, reboot)...");
+
+    // 1. Verify exact command recognition in COMMAND_REGISTRY
+    let exit_def = COMMAND_REGISTRY.iter().find(|c| c.name == "exit").expect("exit command missing");
+    assert_eq!(exit_def.summary, "Leave the current shell when supported");
+    assert!(exit_def.aliases.iter().any(|&a| a == "quit"));
+
+    let shutdown_def = COMMAND_REGISTRY.iter().find(|c| c.name == "shutdown").expect("shutdown command missing");
+    assert_eq!(shutdown_def.summary, "Request a safe system shutdown");
+    assert!(shutdown_def.aliases.iter().any(|&a| a == "poweroff"));
+
+    let reboot_def = COMMAND_REGISTRY.iter().find(|c| c.name == "reboot").expect("reboot command missing");
+    assert_eq!(reboot_def.summary, "Restart the system");
+    assert!(reboot_def.aliases.iter().any(|&a| a == "restart"));
+
+    // 2. Exact command invocation of `exit` on root shell context
+    let s_exit = execute_command("exit", ctx);
+    assert_eq!(s_exit, 0, "Root shell exit should return 0 after printing warning notice");
+
+    let s_quit = execute_command("quit", ctx);
+    assert_eq!(s_quit, 0, "Quit alias should return 0 after printing warning notice");
+
+    // 3. Arguments validation: exit with unexpected arguments returns 1
+    let s_exit_bad = execute_command("exit now", ctx);
+    assert_eq!(s_exit_bad, 1, "exit with unexpected arguments must return 1");
+
+    // 4. Arguments validation: shutdown and reboot with unexpected arguments return 1
+    let s_shut_bad = execute_command("shutdown -h now", ctx);
+    assert_eq!(s_shut_bad, 1, "shutdown with unexpected arguments must return 1 and not trigger shutdown");
+
+    let s_reboot_bad = execute_command("reboot --force", ctx);
+    assert_eq!(s_reboot_bad, 1, "reboot with unexpected arguments must return 1 and not trigger reboot");
+
+    // 5. Quoted text / substrings must NOT trigger lifecycle actions
+    let p_echo = execute_command("echo 'shutdown and reboot'", ctx);
+    assert_eq!(p_echo, 0, "echo containing lifecycle words must execute echo normally");
+
+    let p_touch = execute_command("touch shutdown.txt", ctx);
+    assert_eq!(p_touch, 0, "touch shutdown.txt must create file and not trigger shutdown");
+
+    // Clean up test file
+    let _ = execute_command("rm shutdown.txt", ctx);
+
+    // 6. Test lifecycle handler directly for root shell vs child shell
+    let res_root = crate::lifecycle::handle_exit(true);
+    assert_eq!(res_root, crate::lifecycle::LifecycleResult::RootShellNotice);
+
+    let res_child = crate::lifecycle::handle_exit(false);
+    assert_eq!(res_child, crate::lifecycle::LifecycleResult::ChildShellExited);
+
+    log_info!("  [OK] System lifecycle command recognition, argument bounds, and isolation verified.");
 }
