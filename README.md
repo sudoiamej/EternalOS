@@ -2,6 +2,8 @@
 
 EternalOS is an x86-64 operating system built from scratch with a Rust-first hybrid kernel architecture, booting via the modern Limine boot protocol.
 
+![EternalOS System Architecture](assets/architecture/Architecture_System.jpg)
+
 ---
 
 ## 🎯 Architecture & Milestone Goals
